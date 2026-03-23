@@ -6,21 +6,21 @@ public sealed class ScriptBuiltInRegistry
 
     public ScriptBuiltInRegistry()
     {
-        RegisterAction("move_up", true, null, "Move the drone up by one tile.");
-        RegisterAction("move_down", true, null, "Move the drone down by one tile.");
-        RegisterAction("move_left", true, null, "Move the drone left by one tile.");
-        RegisterAction("move_right", true, null, "Move the drone right by one tile.");
-        RegisterAction("pick_up", true, null, "Pick up a package at the current tile.");
-        RegisterAction("drop_off", true, null, "Drop off a package at the current tile.");
+        RegisterAction("move_up", true, null, "Moves the drone up by one tile.");
+        RegisterAction("move_down", true, null, "Moves the drone down by one tile.");
+        RegisterAction("move_left", true, null, "Moves the drone left by one tile.");
+        RegisterAction("move_right", true, null, "Moves the drone right by one tile.");
+        RegisterAction("pick_up", true, null, "Picks up a package on the current tile, if one is available.");
+        RegisterAction("drop_off", true, null, "Drops off the carried package on the current tile, if delivery is valid.");
 
-        RegisterQuery("package_here", true, null, "True when a package is available at the current tile.");
-        RegisterQuery("delivery_here", true, null, "True when a valid delivery can be made here.");
-        RegisterQuery("carrying_package", true, null, "True when the drone is carrying a package.");
+        RegisterQuery("package_here", true, null, "Returns true if a package is on the drone's current tile.");
+        RegisterQuery("delivery_here", true, null, "Returns true if the current tile is a delivery destination.");
+        RegisterQuery("carrying_package", true, null, "Returns true if the drone is currently carrying a package.");
 
-        RegisterQuery("can_move_up", true, null, "True when the drone can move up.");
-        RegisterQuery("can_move_down", true, null, "True when the drone can move down.");
-        RegisterQuery("can_move_left", true, null, "True when the drone can move left.");
-        RegisterQuery("can_move_right", true, null, "True when the drone can move right.");
+        RegisterQuery("can_move_up", true, null, "Returns true if the drone can move up from its current position.");
+        RegisterQuery("can_move_down", true, null, "Returns true if the drone can move down from its current position.");
+        RegisterQuery("can_move_left", true, null, "Returns true if the drone can move left from its current position.");
+        RegisterQuery("can_move_right", true, null, "Returns true if the drone can move right from its current position.");
     }
 
     public bool TryGetDefinition(string name, out ScriptBuiltInDefinition definition)

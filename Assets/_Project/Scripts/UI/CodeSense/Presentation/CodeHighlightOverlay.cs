@@ -8,6 +8,11 @@ public sealed class CodeHighlightOverlay : MonoBehaviour
     [SerializeField] private RectTransform _inputTextViewport;
     [SerializeField] private RectTransform _highlightViewport;
 
+    public TextMeshProUGUI HighlightText
+    {
+        get { return _highlightText; }
+    }
+
     private Vector2 _lastAnchoredPosition;
     private Vector2 _lastSizeDelta;
 

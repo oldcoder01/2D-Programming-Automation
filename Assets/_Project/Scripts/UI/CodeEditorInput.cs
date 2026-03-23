@@ -5,9 +5,8 @@ using UnityEngine.EventSystems;
 public sealed class CodeEditorInput : MonoBehaviour
 {
     [SerializeField] private TMP_InputField _inputField;
+    [SerializeField] private CodeCompletionPopupController _completionPopupController;
     [SerializeField] private int _spacesPerTab = 4;
-
-    private bool _preferLineStartOnHome;
 
     private string IndentString
     {
@@ -17,6 +16,7 @@ public sealed class CodeEditorInput : MonoBehaviour
     private void Reset()
     {
         _inputField = GetComponent<TMP_InputField>();
+        _completionPopupController = GetComponent<CodeCompletionPopupController>();
     }
 
     private void Awake()
@@ -24,6 +24,11 @@ public sealed class CodeEditorInput : MonoBehaviour
         if (_inputField == null)
         {
             _inputField = GetComponent<TMP_InputField>();
+        }
+
+        if (_completionPopupController == null)
+        {
+            _completionPopupController = GetComponent<CodeCompletionPopupController>();
         }
 
         if (_inputField != null)
@@ -50,41 +55,8 @@ public sealed class CodeEditorInput : MonoBehaviour
             return;
         }
 
-        if (currentEvent.keyCode == KeyCode.LeftArrow ||
-            currentEvent.keyCode == KeyCode.RightArrow ||
-            currentEvent.keyCode == KeyCode.UpArrow ||
-            currentEvent.keyCode == KeyCode.DownArrow ||
-            currentEvent.keyCode == KeyCode.Backspace ||
-            currentEvent.keyCode == KeyCode.Delete ||
-            currentEvent.keyCode == KeyCode.Return ||
-            currentEvent.keyCode == KeyCode.KeypadEnter ||
-            currentEvent.keyCode == KeyCode.Tab ||
-            currentEvent.keyCode == KeyCode.Home ||
-            currentEvent.keyCode == KeyCode.End ||
-            currentEvent.character != '\0')
+        if (HandleCompletionPopupKeys(currentEvent))
         {
-            _preferLineStartOnHome = true;
-        }
-
-        if (currentEvent.keyCode == KeyCode.Tab)
-        {
-            if (currentEvent.shift)
-            {
-                UnindentSelectionOrLine();
-            }
-            else
-            {
-                IndentSelectionOrLine();
-            }
-
-            currentEvent.Use();
-            return;
-        }
-
-        if (currentEvent.keyCode == KeyCode.Home)
-        {
-            MoveCaretHome(currentEvent.shift);
-            currentEvent.Use();
             return;
         }
 
@@ -93,6 +65,7 @@ public sealed class CodeEditorInput : MonoBehaviour
             if (HasSelection())
             {
                 CutSelection();
+                RefreshCompletionPopup();
                 currentEvent.Use();
             }
 
@@ -102,6 +75,15 @@ public sealed class CodeEditorInput : MonoBehaviour
         if ((currentEvent.shift && currentEvent.keyCode == KeyCode.Insert) || (currentEvent.control && currentEvent.keyCode == KeyCode.V))
         {
             PasteSelection();
+            RefreshCompletionPopup();
+            currentEvent.Use();
+            return;
+        }
+
+        if (currentEvent.keyCode == KeyCode.Tab)
+        {
+            InsertIndent();
+            RefreshCompletionPopup();
             currentEvent.Use();
             return;
         }
@@ -110,6 +92,7 @@ public sealed class CodeEditorInput : MonoBehaviour
         {
             if (TryHandleSoftTabBackspace())
             {
+                RefreshCompletionPopup();
                 currentEvent.Use();
             }
 
@@ -119,8 +102,14 @@ public sealed class CodeEditorInput : MonoBehaviour
         if (currentEvent.keyCode == KeyCode.Return || currentEvent.keyCode == KeyCode.KeypadEnter)
         {
             InsertSmartNewLine();
+            RefreshCompletionPopup();
             currentEvent.Use();
             return;
+        }
+
+        if (ShouldRefreshPopupAfterTyping(currentEvent))
+        {
+            QueuePopupRefresh();
         }
     }
 
@@ -170,31 +159,104 @@ public sealed class CodeEditorInput : MonoBehaviour
         return _inputField.selectionStringAnchorPosition != _inputField.selectionStringFocusPosition;
     }
 
-    private void IndentSelectionOrLine()
+    private bool HandleCompletionPopupKeys(Event currentEvent)
     {
-        if (HasSelection())
+        if (_completionPopupController == null || !_completionPopupController.IsOpen)
         {
-            IndentSelectedLines();
-        }
-        else
-        {
-            ReplaceSelection(IndentString);
+            return false;
         }
 
-        _inputField.ForceLabelUpdate();
+        if (currentEvent.keyCode == KeyCode.DownArrow)
+        {
+            _completionPopupController.SelectNext();
+            currentEvent.Use();
+            return true;
+        }
+
+        if (currentEvent.keyCode == KeyCode.UpArrow)
+        {
+            _completionPopupController.SelectPrevious();
+            currentEvent.Use();
+            return true;
+        }
+
+        if (currentEvent.keyCode == KeyCode.Escape)
+        {
+            _completionPopupController.HidePopup();
+            currentEvent.Use();
+            return true;
+        }
+
+        if (currentEvent.keyCode == KeyCode.Tab)
+        {
+            _completionPopupController.AcceptSelected();
+            currentEvent.Use();
+            return true;
+        }
+
+        if (currentEvent.keyCode == KeyCode.Return || currentEvent.keyCode == KeyCode.KeypadEnter)
+        {
+            _completionPopupController.AcceptSelected();
+            currentEvent.Use();
+            return true;
+        }
+
+        return false;
     }
 
-    private void UnindentSelectionOrLine()
+    private bool ShouldRefreshPopupAfterTyping(Event currentEvent)
     {
-        if (HasSelection())
+        if (_completionPopupController == null)
         {
-            UnindentSelectedLines();
-        }
-        else
-        {
-            UnindentCurrentLine();
+            return false;
         }
 
+        if (currentEvent.control || currentEvent.alt || currentEvent.command)
+        {
+            return false;
+        }
+
+        if (currentEvent.character == '\0')
+        {
+            return false;
+        }
+
+        if (char.IsLetterOrDigit(currentEvent.character))
+        {
+            return true;
+        }
+
+        if (currentEvent.character == '_')
+        {
+            return true;
+        }
+
+        return false;
+    }
+
+    private void QueuePopupRefresh()
+    {
+        if (_completionPopupController == null)
+        {
+            return;
+        }
+
+        _completionPopupController.RefreshPopup();
+    }
+
+    private void RefreshCompletionPopup()
+    {
+        if (_completionPopupController == null)
+        {
+            return;
+        }
+
+        _completionPopupController.RefreshPopup();
+    }
+
+    private void InsertIndent()
+    {
+        ReplaceSelection(IndentString);
         _inputField.ForceLabelUpdate();
     }
 
@@ -259,10 +321,11 @@ public sealed class CodeEditorInput : MonoBehaviour
         string lineIndentation = GetLeadingIndentation(currentLine);
 
         string lineBeforeCaret = text.Substring(lineStart, caret - lineStart);
+        string lineAfterCaret = text.Substring(caret, lineEnd - caret);
         string trimmedBeforeCaret = lineBeforeCaret.TrimEnd();
 
         bool isWhitespaceOnlyBeforeCaret = string.IsNullOrWhiteSpace(lineBeforeCaret);
-        bool isWhitespaceOnlyAfterCaret = string.IsNullOrWhiteSpace(text.Substring(caret, lineEnd - caret));
+        bool isWhitespaceOnlyAfterCaret = string.IsNullOrWhiteSpace(lineAfterCaret);
 
         string newIndentation = lineIndentation;
 
@@ -333,280 +396,18 @@ public sealed class CodeEditorInput : MonoBehaviour
             deleteStart = lineStart;
         }
 
-        int i = deleteStart;
-        while (i < caret)
+        for (int i = deleteStart; i < caret; i++)
         {
             if (text[i] != ' ')
             {
                 return false;
             }
-
-            i++;
         }
 
         _inputField.text = text.Remove(deleteStart, caret - deleteStart);
         SetCaret(deleteStart);
         _inputField.ForceLabelUpdate();
         return true;
-    }
-
-    private void MoveCaretHome(bool extendSelection)
-    {
-        if (_inputField == null)
-        {
-            return;
-        }
-
-        string text = _inputField.text;
-        if (text == null)
-        {
-            text = string.Empty;
-        }
-
-        int caret = _inputField.stringPosition;
-        if (caret < 0)
-        {
-            caret = 0;
-        }
-
-        if (caret > text.Length)
-        {
-            caret = text.Length;
-        }
-
-        int lineStart = GetLineStartIndex(text, caret);
-        int firstNonWhitespace = GetFirstNonWhitespaceIndex(text, lineStart);
-
-        int target;
-        if (_preferLineStartOnHome && caret != firstNonWhitespace)
-        {
-            target = firstNonWhitespace;
-            _preferLineStartOnHome = false;
-        }
-        else
-        {
-            target = lineStart;
-            _preferLineStartOnHome = true;
-        }
-
-        if (extendSelection)
-        {
-            SetCaretWithSelection(target, _inputField.selectionStringAnchorPosition);
-        }
-        else
-        {
-            SetCaret(target);
-        }
-
-        _inputField.ForceLabelUpdate();
-    }
-
-    private void IndentSelectedLines()
-    {
-        string text = _inputField.text;
-        if (text == null)
-        {
-            text = string.Empty;
-        }
-
-        int originalStart = Mathf.Min(_inputField.selectionStringAnchorPosition, _inputField.selectionStringFocusPosition);
-        int originalEnd = Mathf.Max(_inputField.selectionStringAnchorPosition, _inputField.selectionStringFocusPosition);
-
-        if (originalStart < 0)
-        {
-            originalStart = 0;
-        }
-
-        if (originalEnd < 0)
-        {
-            originalEnd = 0;
-        }
-
-        if (originalStart > text.Length)
-        {
-            originalStart = text.Length;
-        }
-
-        if (originalEnd > text.Length)
-        {
-            originalEnd = text.Length;
-        }
-
-        int blockStart = GetLineStartIndex(text, originalStart);
-        int blockEnd = GetLineEndIndexForSelection(text, originalEnd);
-
-        string blockText = text.Substring(blockStart, blockEnd - blockStart);
-        string[] lines = blockText.Split('\n');
-
-        System.Text.StringBuilder builder = new System.Text.StringBuilder();
-
-        int i = 0;
-        while (i < lines.Length)
-        {
-            builder.Append(IndentString);
-            builder.Append(lines[i]);
-
-            if (i < lines.Length - 1)
-            {
-                builder.Append('\n');
-            }
-
-            i++;
-        }
-
-        string updatedBlock = builder.ToString();
-        _inputField.text = text.Substring(0, blockStart) + updatedBlock + text.Substring(blockEnd);
-
-        int newStart = originalStart + IndentString.Length;
-        int newEnd = originalEnd + (IndentString.Length * lines.Length);
-
-        SetSelection(newStart, newEnd);
-    }
-
-    private void UnindentSelectedLines()
-    {
-        string text = _inputField.text;
-        if (text == null)
-        {
-            text = string.Empty;
-        }
-
-        int originalStart = Mathf.Min(_inputField.selectionStringAnchorPosition, _inputField.selectionStringFocusPosition);
-        int originalEnd = Mathf.Max(_inputField.selectionStringAnchorPosition, _inputField.selectionStringFocusPosition);
-
-        if (originalStart < 0)
-        {
-            originalStart = 0;
-        }
-
-        if (originalEnd < 0)
-        {
-            originalEnd = 0;
-        }
-
-        if (originalStart > text.Length)
-        {
-            originalStart = text.Length;
-        }
-
-        if (originalEnd > text.Length)
-        {
-            originalEnd = text.Length;
-        }
-
-        int blockStart = GetLineStartIndex(text, originalStart);
-        int blockEnd = GetLineEndIndexForSelection(text, originalEnd);
-
-        string blockText = text.Substring(blockStart, blockEnd - blockStart);
-        string[] lines = blockText.Split('\n');
-
-        System.Text.StringBuilder builder = new System.Text.StringBuilder();
-        int removedFromFirstLineBeforeSelection = 0;
-        int totalRemoved = 0;
-
-        int i = 0;
-        while (i < lines.Length)
-        {
-            int removable = GetLeadingSpacesToRemove(lines[i]);
-
-            if (i == 0)
-            {
-                int selectionOffsetInFirstLine = originalStart - blockStart;
-                removedFromFirstLineBeforeSelection = Mathf.Min(selectionOffsetInFirstLine, removable);
-            }
-
-            totalRemoved += removable;
-
-            if (removable > 0)
-            {
-                builder.Append(lines[i].Substring(removable));
-            }
-            else
-            {
-                builder.Append(lines[i]);
-            }
-
-            if (i < lines.Length - 1)
-            {
-                builder.Append('\n');
-            }
-
-            i++;
-        }
-
-        string updatedBlock = builder.ToString();
-        _inputField.text = text.Substring(0, blockStart) + updatedBlock + text.Substring(blockEnd);
-
-        int newStart = originalStart - removedFromFirstLineBeforeSelection;
-        int newEnd = originalEnd - totalRemoved;
-
-        if (newStart < blockStart)
-        {
-            newStart = blockStart;
-        }
-
-        if (newEnd < newStart)
-        {
-            newEnd = newStart;
-        }
-
-        SetSelection(newStart, newEnd);
-    }
-
-    private void UnindentCurrentLine()
-    {
-        string text = _inputField.text;
-        if (text == null)
-        {
-            text = string.Empty;
-        }
-
-        int caret = _inputField.stringPosition;
-        if (caret < 0)
-        {
-            caret = 0;
-        }
-
-        if (caret > text.Length)
-        {
-            caret = text.Length;
-        }
-
-        int lineStart = GetLineStartIndex(text, caret);
-        int lineEnd = GetLineEndIndex(text, caret);
-        string lineText = text.Substring(lineStart, lineEnd - lineStart);
-
-        int removable = GetLeadingSpacesToRemove(lineText);
-        if (removable <= 0)
-        {
-            return;
-        }
-
-        _inputField.text = text.Remove(lineStart, removable);
-
-        int newCaret = caret - removable;
-        if (newCaret < lineStart)
-        {
-            newCaret = lineStart;
-        }
-
-        SetCaret(newCaret);
-    }
-
-    private int GetLeadingSpacesToRemove(string line)
-    {
-        if (string.IsNullOrEmpty(line))
-        {
-            return 0;
-        }
-
-        int count = 0;
-        while (count < line.Length && count < _spacesPerTab && line[count] == ' ')
-        {
-            count++;
-        }
-
-        return count;
     }
 
     private int GetLineStartIndex(string text, int caret)
@@ -641,23 +442,6 @@ public sealed class CodeEditorInput : MonoBehaviour
         }
 
         return index;
-    }
-
-    private int GetLineEndIndexForSelection(string text, int selectionEnd)
-    {
-        if (string.IsNullOrEmpty(text))
-        {
-            return 0;
-        }
-
-        int clampedEnd = Mathf.Clamp(selectionEnd, 0, text.Length);
-
-        if (clampedEnd > 0 && clampedEnd <= text.Length && text[clampedEnd - 1] == '\n')
-        {
-            return clampedEnd;
-        }
-
-        return GetLineEndIndex(text, clampedEnd);
     }
 
     private string GetLeadingIndentation(string lineText)
@@ -786,25 +570,5 @@ public sealed class CodeEditorInput : MonoBehaviour
         _inputField.caretPosition = position;
         _inputField.selectionAnchorPosition = position;
         _inputField.selectionFocusPosition = position;
-    }
-
-    private void SetSelection(int start, int end)
-    {
-        _inputField.stringPosition = end;
-        _inputField.selectionStringAnchorPosition = start;
-        _inputField.selectionStringFocusPosition = end;
-        _inputField.caretPosition = end;
-        _inputField.selectionAnchorPosition = start;
-        _inputField.selectionFocusPosition = end;
-    }
-
-    private void SetCaretWithSelection(int focusPosition, int anchorPosition)
-    {
-        _inputField.stringPosition = focusPosition;
-        _inputField.selectionStringAnchorPosition = anchorPosition;
-        _inputField.selectionStringFocusPosition = focusPosition;
-        _inputField.caretPosition = focusPosition;
-        _inputField.selectionAnchorPosition = anchorPosition;
-        _inputField.selectionFocusPosition = focusPosition;
     }
 }

@@ -52,6 +52,11 @@ public static class CodeSenseRegistryBuilder
         RegisterBuiltInIfPresent(registry, builtInRegistry, "package_here");
         RegisterBuiltInIfPresent(registry, builtInRegistry, "delivery_here");
         RegisterBuiltInIfPresent(registry, builtInRegistry, "carrying_package");
+
+        RegisterBuiltInIfPresent(registry, builtInRegistry, "can_move_up");
+        RegisterBuiltInIfPresent(registry, builtInRegistry, "can_move_down");
+        RegisterBuiltInIfPresent(registry, builtInRegistry, "can_move_left");
+        RegisterBuiltInIfPresent(registry, builtInRegistry, "can_move_right");
     }
 
     private static void RegisterBuiltInIfPresent(CodeSenseRegistry registry, ScriptBuiltInRegistry builtInRegistry, string name)
