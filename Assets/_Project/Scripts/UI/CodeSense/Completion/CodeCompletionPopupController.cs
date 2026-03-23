@@ -5,6 +5,7 @@ public sealed class CodeCompletionPopupController : MonoBehaviour
 {
     [SerializeField] private TMP_InputField _inputField;
     [SerializeField] private CodeEditorCodeSenseController _codeSenseController;
+    [SerializeField] private CodeEditorHistoryController _historyController;
     [SerializeField] private GameObject _popupRoot;
     [SerializeField] private RectTransform _popupRect;
     [SerializeField] private TextMeshProUGUI _popupText;
@@ -34,6 +35,11 @@ public sealed class CodeCompletionPopupController : MonoBehaviour
         if (_codeSenseController == null)
         {
             _codeSenseController = GetComponent<CodeEditorCodeSenseController>();
+        }
+
+        if (_historyController == null)
+        {
+            _historyController = GetComponent<CodeEditorHistoryController>();
         }
 
         if (_popupRect == null && _popupRoot != null)
@@ -141,7 +147,20 @@ public sealed class CodeCompletionPopupController : MonoBehaviour
         }
 
         CodeCompletionItem item = _currentResult.Items[_selectedIndex];
+
+        if (_historyController != null)
+        {
+            _historyController.BreakTypingGroup();
+            _historyController.BeginCompositeEdit();
+        }
+
         ApplyCompletion(item);
+
+        if (_historyController != null)
+        {
+            _historyController.EndCompositeEdit();
+        }
+
         HidePopup();
     }
 

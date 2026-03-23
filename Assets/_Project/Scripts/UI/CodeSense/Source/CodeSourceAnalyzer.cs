@@ -33,9 +33,7 @@ public sealed class CodeSourceAnalyzer
             return result;
         }
 
-        string normalized = source.Replace("\r\n", "\n").Replace("\r", "\n");
-
-        ScanTokens(normalized, result);
+        ScanTokens(source, result);
         DiscoverFunctionDefinitions(result);
         ClassifyIdentifiers(result, builtInRegistry);
 
@@ -51,6 +49,22 @@ public sealed class CodeSourceAnalyzer
         while (index < source.Length)
         {
             char current = source[index];
+
+            if (current == '\r')
+            {
+                if (index + 1 < source.Length && source[index + 1] == '\n')
+                {
+                    index += 2;
+                }
+                else
+                {
+                    index++;
+                }
+
+                line++;
+                column = 1;
+                continue;
+            }
 
             if (current == '\n')
             {

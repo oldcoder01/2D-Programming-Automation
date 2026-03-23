@@ -6,6 +6,7 @@ public sealed class CodeEditorInput : MonoBehaviour
 {
     [SerializeField] private TMP_InputField _inputField;
     [SerializeField] private CodeCompletionPopupController _completionPopupController;
+    [SerializeField] private CodeEditorHistoryController _historyController;
     [SerializeField] private int _spacesPerTab = 4;
 
     private string IndentString
@@ -17,6 +18,7 @@ public sealed class CodeEditorInput : MonoBehaviour
     {
         _inputField = GetComponent<TMP_InputField>();
         _completionPopupController = GetComponent<CodeCompletionPopupController>();
+        _historyController = GetComponent<CodeEditorHistoryController>();
     }
 
     private void Awake()
@@ -29,6 +31,11 @@ public sealed class CodeEditorInput : MonoBehaviour
         if (_completionPopupController == null)
         {
             _completionPopupController = GetComponent<CodeCompletionPopupController>();
+        }
+
+        if (_historyController == null)
+        {
+            _historyController = GetComponent<CodeEditorHistoryController>();
         }
 
         if (_inputField != null)
@@ -60,11 +67,17 @@ public sealed class CodeEditorInput : MonoBehaviour
             return;
         }
 
+        if (HandleUndoRedoKeys(currentEvent))
+        {
+            RefreshCompletionPopup();
+            return;
+        }
+
         if ((currentEvent.shift && currentEvent.keyCode == KeyCode.Delete) || (currentEvent.control && currentEvent.keyCode == KeyCode.X))
         {
             if (HasSelection())
             {
-                CutSelection();
+                ExecuteHistoryAction(CutSelection);
                 RefreshCompletionPopup();
                 currentEvent.Use();
             }
@@ -74,7 +87,7 @@ public sealed class CodeEditorInput : MonoBehaviour
 
         if ((currentEvent.shift && currentEvent.keyCode == KeyCode.Insert) || (currentEvent.control && currentEvent.keyCode == KeyCode.V))
         {
-            PasteSelection();
+            ExecuteHistoryAction(PasteSelection);
             RefreshCompletionPopup();
             currentEvent.Use();
             return;
@@ -82,7 +95,7 @@ public sealed class CodeEditorInput : MonoBehaviour
 
         if (currentEvent.keyCode == KeyCode.Tab)
         {
-            InsertIndent();
+            ExecuteHistoryAction(InsertIndent);
             RefreshCompletionPopup();
             currentEvent.Use();
             return;
@@ -90,7 +103,8 @@ public sealed class CodeEditorInput : MonoBehaviour
 
         if (currentEvent.keyCode == KeyCode.Backspace)
         {
-            if (TryHandleSoftTabBackspace())
+            bool changed = ExecuteHistoryActionWithResult(TryHandleSoftTabBackspace);
+            if (changed)
             {
                 RefreshCompletionPopup();
                 currentEvent.Use();
@@ -101,7 +115,7 @@ public sealed class CodeEditorInput : MonoBehaviour
 
         if (currentEvent.keyCode == KeyCode.Return || currentEvent.keyCode == KeyCode.KeypadEnter)
         {
-            InsertSmartNewLine();
+            ExecuteHistoryAction(InsertSmartNewLine);
             RefreshCompletionPopup();
             currentEvent.Use();
             return;
@@ -154,6 +168,52 @@ public sealed class CodeEditorInput : MonoBehaviour
         return selectedObject == _inputField.gameObject;
     }
 
+    private void ExecuteHistoryAction(System.Action action)
+    {
+        if (action == null)
+        {
+            return;
+        }
+
+        if (_historyController == null)
+        {
+            action();
+            return;
+        }
+
+        _historyController.BeginCompositeEdit();
+        action();
+        _historyController.EndCompositeEdit();
+    }
+
+    private bool ExecuteHistoryActionWithResult(System.Func<bool> action)
+    {
+        if (action == null)
+        {
+            return false;
+        }
+
+        if (_historyController == null)
+        {
+            return action();
+        }
+
+        _historyController.BeginCompositeEdit();
+
+        bool changed = action();
+
+        if (changed)
+        {
+            _historyController.EndCompositeEdit();
+        }
+        else
+        {
+            _historyController.CancelCompositeEdit();
+        }
+
+        return changed;
+    }
+
     private bool HasSelection()
     {
         return _inputField.selectionStringAnchorPosition != _inputField.selectionStringFocusPosition;
@@ -197,6 +257,34 @@ public sealed class CodeEditorInput : MonoBehaviour
         if (currentEvent.keyCode == KeyCode.Return || currentEvent.keyCode == KeyCode.KeypadEnter)
         {
             _completionPopupController.AcceptSelected();
+            currentEvent.Use();
+            return true;
+        }
+
+        return false;
+    }
+
+    private bool HandleUndoRedoKeys(Event currentEvent)
+    {
+        if (_historyController == null)
+        {
+            return false;
+        }
+
+        bool isUndo = currentEvent.control && !currentEvent.shift && currentEvent.keyCode == KeyCode.Z;
+        bool isRedoPrimary = currentEvent.control && currentEvent.keyCode == KeyCode.Y;
+        bool isRedoAlternate = currentEvent.control && currentEvent.shift && currentEvent.keyCode == KeyCode.Z;
+
+        if (isUndo)
+        {
+            _historyController.Undo();
+            currentEvent.Use();
+            return true;
+        }
+
+        if (isRedoPrimary || isRedoAlternate)
+        {
+            _historyController.Redo();
             currentEvent.Use();
             return true;
         }
@@ -256,12 +344,14 @@ public sealed class CodeEditorInput : MonoBehaviour
 
     private void InsertIndent()
     {
+        BreakTypingUndoGroup();
         ReplaceSelection(IndentString);
         _inputField.ForceLabelUpdate();
     }
 
     private void CutSelection()
     {
+        BreakTypingUndoGroup();
         string selectedText = GetSelectedText();
         if (string.IsNullOrEmpty(selectedText))
         {
@@ -281,6 +371,7 @@ public sealed class CodeEditorInput : MonoBehaviour
             return;
         }
 
+        BreakTypingUndoGroup();
         ReplaceSelection(NormalizeTabsToSpaces(clipboardText));
         _inputField.ForceLabelUpdate();
     }
@@ -291,6 +382,7 @@ public sealed class CodeEditorInput : MonoBehaviour
         {
             return;
         }
+        BreakTypingUndoGroup();
 
         string text = _inputField.text;
         if (text == null)
@@ -349,6 +441,8 @@ public sealed class CodeEditorInput : MonoBehaviour
         {
             return false;
         }
+
+        BreakTypingUndoGroup();
 
         if (HasSelection())
         {
@@ -570,5 +664,15 @@ public sealed class CodeEditorInput : MonoBehaviour
         _inputField.caretPosition = position;
         _inputField.selectionAnchorPosition = position;
         _inputField.selectionFocusPosition = position;
+    }
+
+    private void BreakTypingUndoGroup()
+    {
+        if (_historyController == null)
+        {
+            return;
+        }
+
+        _historyController.BreakTypingGroup();
     }
 }
