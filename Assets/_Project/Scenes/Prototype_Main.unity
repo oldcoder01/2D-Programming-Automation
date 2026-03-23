@@ -2238,12 +2238,14 @@ MonoBehaviour:
   m_GameObject: {fileID: 749120714}
   m_Enabled: 1
   m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 7b1c3bdb6f228ab489abe2d995d7f20e, type: 3}
+  m_Script: {fileID: 11500000, guid: fe3fc0be9fd741c4a851b58075536b8e, type: 3}
   m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::CodeSymbolInfoController
+  m_EditorClassIdentifier: Assembly-CSharp::CodeHoverSymbolInfoController
   _inputField: {fileID: 1639507460}
   _codeSenseController: {fileID: 749120721}
   _symbolInfoPanel: {fileID: 1892678954}
+  _uiCamera: {fileID: 0}
+  _logHoverDebug: 0
 --- !u!1 &765526266
 GameObject:
   m_ObjectHideFlags: 0
