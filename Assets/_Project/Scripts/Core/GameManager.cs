@@ -5,7 +5,6 @@ public sealed class GameManager : MonoBehaviour
     [SerializeField] private WorldController _worldController;
     [SerializeField] private ScriptRuntimeController _scriptRuntimeController;
     [SerializeField] private DroneController _droneController;
-    [SerializeField] private CodePanelUI _codePanelUI;
     [SerializeField] private GameLog _gameLog;
     [SerializeField] private StatusPanelUI _statusPanelUI;
     [SerializeField] private ObjectiveController _objectiveController;
@@ -34,14 +33,6 @@ public sealed class GameManager : MonoBehaviour
             return;
         }
 
-        if (_codePanelUI == null)
-        {
-            Debug.LogError("GameManager is missing CodePanelUI reference.");
-            return;
-        }
-
-        string sourceCode = _codePanelUI.GetCodeText();
-        _scriptRuntimeController.RunSource(sourceCode);
         RefreshStatusPanel();
     }
 
