@@ -62,11 +62,18 @@ public sealed class ScriptInterpreter
 
     private IEnumerator ExecuteStatementCoroutine(ScriptStatement statement, ScriptRuntimeContext context, float stepDelay)
     {
+        context.NotifyExecutionLine(statement.LineNumber);
         context.StepCounter++;
 
         if (context.StepCounter > context.MaxSteps)
         {
-            context.WriteError(ScriptMessageFormatter.MaximumStepCountReached());
+            context.ReportRuntimeError(
+                statement.LineNumber,
+                ScriptMessageFormatter.LineMessage(
+                    statement.LineNumber,
+                    ScriptMessageFormatter.MaximumStepCountReached()
+                )
+            );
             context.IsRunning = false;
             yield break;
         }
@@ -81,6 +88,13 @@ public sealed class ScriptInterpreter
         ScriptIfStatement ifStatement = statement as ScriptIfStatement;
         if (ifStatement != null)
         {
+            yield return PauseOnControlFlowLine(ifStatement.LineNumber, context, stepDelay);
+
+            if (!context.IsRunning)
+            {
+                yield break;
+            }
+
             bool condition = EvaluateExpression(ifStatement.Condition, context);
             if (!context.IsRunning)
             {
@@ -96,6 +110,14 @@ public sealed class ScriptInterpreter
             for (int i = 0; i < ifStatement.ElifBranches.Count; i++)
             {
                 ScriptElifBranch branch = ifStatement.ElifBranches[i];
+
+                yield return PauseOnControlFlowLine(branch.LineNumber, context, stepDelay);
+
+                if (!context.IsRunning)
+                {
+                    yield break;
+                }
+
                 bool elifCondition = EvaluateExpression(branch.Condition, context);
                 if (!context.IsRunning)
                 {
@@ -120,15 +142,39 @@ public sealed class ScriptInterpreter
         ScriptWhileStatement whileStatement = statement as ScriptWhileStatement;
         if (whileStatement != null)
         {
-            while (context.IsRunning && EvaluateExpression(whileStatement.Condition, context))
+            while (context.IsRunning)
             {
+                yield return PauseOnControlFlowLine(whileStatement.LineNumber, context, stepDelay);
+
+                if (!context.IsRunning)
+                {
+                    yield break;
+                }
+
+                bool condition = EvaluateExpression(whileStatement.Condition, context);
+                if (!context.IsRunning)
+                {
+                    yield break;
+                }
+
+                if (!condition)
+                {
+                    yield break;
+                }
+
                 yield return ExecuteBlockCoroutine(whileStatement.Block, context, stepDelay);
+
+                if (!context.IsRunning)
+                {
+                    yield break;
+                }
             }
 
             yield break;
         }
 
-        context.WriteError(
+        context.ReportRuntimeError(
+            statement.LineNumber,
             ScriptMessageFormatter.LineMessage(
                 statement.LineNumber,
                 ScriptMessageFormatter.StatementTypeNotSupported()
@@ -137,13 +183,24 @@ public sealed class ScriptInterpreter
         context.IsRunning = false;
     }
 
+    private IEnumerator PauseOnControlFlowLine(int lineNumber, ScriptRuntimeContext context, float stepDelay)
+    {
+        context.NotifyExecutionLine(lineNumber);
+
+        if (stepDelay > 0f)
+        {
+            yield return new WaitForSeconds(stepDelay);
+        }
+    }
+
     private IEnumerator ExecuteCallStatementCoroutine(ScriptCallStatement statement, ScriptRuntimeContext context, float stepDelay)
     {
         if (context.BuiltInRegistry.TryGetDefinition(statement.Name, out ScriptBuiltInDefinition builtInDefinition))
         {
             if (!context.IsBuiltInUnlocked(builtInDefinition))
             {
-                context.WriteError(
+                context.ReportRuntimeError(
+                    statement.LineNumber,
                     ScriptMessageFormatter.LineMessage(
                         statement.LineNumber,
                         ScriptMessageFormatter.BuiltInLocked(ScriptMessageFormatter.ActionCall(statement.Name))
@@ -155,7 +212,8 @@ public sealed class ScriptInterpreter
 
             if (builtInDefinition.Kind != ScriptBuiltInKind.Action)
             {
-                context.WriteError(
+                context.ReportRuntimeError(
+                    statement.LineNumber,
                     ScriptMessageFormatter.LineMessage(
                         statement.LineNumber,
                         ScriptMessageFormatter.CannotBeUsedAsStatement(ScriptMessageFormatter.ActionCall(statement.Name))
@@ -183,7 +241,8 @@ public sealed class ScriptInterpreter
 
             if (context.CallDepth > context.MaxCallDepth)
             {
-                context.WriteError(
+                context.ReportRuntimeError(
+                    statement.LineNumber,
                     ScriptMessageFormatter.LineMessage(
                         statement.LineNumber,
                         ScriptMessageFormatter.MaximumFunctionCallDepthReached()
@@ -199,7 +258,8 @@ public sealed class ScriptInterpreter
             yield break;
         }
 
-        context.WriteError(
+        context.ReportRuntimeError(
+            statement.LineNumber,
             ScriptMessageFormatter.LineMessage(
                 statement.LineNumber,
                 ScriptMessageFormatter.NotKnownCommandOrFunction(ScriptMessageFormatter.ActionCall(statement.Name))
@@ -237,7 +297,8 @@ public sealed class ScriptInterpreter
                 return !operand;
             }
 
-            context.WriteError(
+            context.ReportRuntimeError(
+                unary.LineNumber,
                 ScriptMessageFormatter.LineMessage(
                     unary.LineNumber,
                     ScriptMessageFormatter.OperatorNotSupportedHere(unary.Operator)
@@ -282,7 +343,8 @@ public sealed class ScriptInterpreter
                 return EvaluateExpression(binary.Right, context);
             }
 
-            context.WriteError(
+            context.ReportRuntimeError(
+                binary.LineNumber,
                 ScriptMessageFormatter.LineMessage(
                     binary.LineNumber,
                     ScriptMessageFormatter.OperatorNotSupportedHere(binary.Operator)
@@ -292,7 +354,13 @@ public sealed class ScriptInterpreter
             return false;
         }
 
-        context.WriteError(ScriptMessageFormatter.ExpressionCouldNotBeEvaluated());
+        context.ReportRuntimeError(
+            expression.LineNumber,
+            ScriptMessageFormatter.LineMessage(
+                expression.LineNumber,
+                ScriptMessageFormatter.ExpressionCouldNotBeEvaluated()
+            )
+        );
         context.IsRunning = false;
         return false;
     }
@@ -301,7 +369,8 @@ public sealed class ScriptInterpreter
     {
         if (!context.BuiltInRegistry.TryGetDefinition(expression.Name, out ScriptBuiltInDefinition builtInDefinition))
         {
-            context.WriteError(
+            context.ReportRuntimeError(
+                expression.LineNumber,
                 ScriptMessageFormatter.LineMessage(
                     expression.LineNumber,
                     ScriptMessageFormatter.NotKnownQuery(ScriptMessageFormatter.ActionCall(expression.Name))
@@ -313,7 +382,8 @@ public sealed class ScriptInterpreter
 
         if (!context.IsBuiltInUnlocked(builtInDefinition))
         {
-            context.WriteError(
+            context.ReportRuntimeError(
+                expression.LineNumber,
                 ScriptMessageFormatter.LineMessage(
                     expression.LineNumber,
                     ScriptMessageFormatter.BuiltInLocked(ScriptMessageFormatter.ActionCall(expression.Name))
@@ -325,7 +395,8 @@ public sealed class ScriptInterpreter
 
         if (builtInDefinition.Kind != ScriptBuiltInKind.Query)
         {
-            context.WriteError(
+            context.ReportRuntimeError(
+                expression.LineNumber,
                 ScriptMessageFormatter.LineMessage(
                     expression.LineNumber,
                     ScriptMessageFormatter.CannotBeUsedInExpression(ScriptMessageFormatter.ActionCall(expression.Name))
@@ -370,7 +441,8 @@ public sealed class ScriptInterpreter
                 return FromActionResult(worldController.TryDropOff(), lineNumber, context);
 
             default:
-                context.WriteError(
+                context.ReportRuntimeError(
+                    lineNumber,
                     ScriptMessageFormatter.LineMessage(
                         lineNumber,
                         ScriptMessageFormatter.NotKnownAction(ScriptMessageFormatter.ActionCall(name))
@@ -408,7 +480,8 @@ public sealed class ScriptInterpreter
                 return ScriptCallResult.QueryResult(worldController.CanMoveRight());
 
             default:
-                context.WriteError(
+                context.ReportRuntimeError(
+                    lineNumber,
                     ScriptMessageFormatter.LineMessage(
                         lineNumber,
                         ScriptMessageFormatter.NotKnownQuery(ScriptMessageFormatter.ActionCall(name))
@@ -422,7 +495,8 @@ public sealed class ScriptInterpreter
     {
         if (actionResult == null)
         {
-            context.WriteError(
+            context.ReportRuntimeError(
+                lineNumber,
                 ScriptMessageFormatter.LineMessage(
                     lineNumber,
                     ScriptMessageFormatter.ActionDidNotReturnResult()

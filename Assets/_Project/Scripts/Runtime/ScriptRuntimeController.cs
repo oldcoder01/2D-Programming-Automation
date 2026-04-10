@@ -1,5 +1,6 @@
 using System;
 using System.Collections;
+using System.Text.RegularExpressions;
 using UnityEngine;
 
 public sealed class ScriptRuntimeController : MonoBehaviour
@@ -10,6 +11,12 @@ public sealed class ScriptRuntimeController : MonoBehaviour
 
     private Coroutine _runtimeCoroutine;
     private bool _isRunning;
+
+    public event Action RuntimeStarted;
+    public event Action RuntimeStopped;
+    public event Action RuntimeFinished;
+    public event Action<int> ExecutionLineChanged;
+    public event Action<int, string> RuntimeErrorRaised;
 
     public bool IsRunning
     {
@@ -40,7 +47,8 @@ public sealed class ScriptRuntimeController : MonoBehaviour
         }
         catch (Exception exception)
         {
-            WriteError(exception.Message);
+            int lineNumber = ExtractLineNumber(exception.Message);
+            RaiseRuntimeError(lineNumber, exception.Message);
         }
     }
 
@@ -56,6 +64,11 @@ public sealed class ScriptRuntimeController : MonoBehaviour
         {
             _isRunning = false;
             WriteLog(ScriptMessageFormatter.RuntimeStopped());
+
+            if (RuntimeStopped != null)
+            {
+                RuntimeStopped();
+            }
         }
     }
 
@@ -64,11 +77,18 @@ public sealed class ScriptRuntimeController : MonoBehaviour
         _isRunning = true;
         WriteLog(ScriptMessageFormatter.RuntimeStarted());
 
+        if (RuntimeStarted != null)
+        {
+            RuntimeStarted();
+        }
+
         ScriptRuntimeContext context = new ScriptRuntimeContext();
         context.WorldController = _worldController;
         context.GameLog = _gameLog;
         context.BuiltInRegistry = new ScriptBuiltInRegistry();
         context.IsRunning = true;
+        context.ExecutionLineChanged = HandleExecutionLineChanged;
+        context.RuntimeErrorRaised = HandleRuntimeErrorRaised;
 
         ScriptInterpreter interpreter = new ScriptInterpreter();
         IEnumerator executionCoroutine = null;
@@ -87,7 +107,8 @@ public sealed class ScriptRuntimeController : MonoBehaviour
 
         if (failedToStart)
         {
-            WriteError(errorMessage);
+            int failedLineNumber = ExtractLineNumber(errorMessage);
+            RaiseRuntimeError(failedLineNumber, errorMessage);
             _isRunning = false;
             _runtimeCoroutine = null;
             yield break;
@@ -101,7 +122,60 @@ public sealed class ScriptRuntimeController : MonoBehaviour
         if (context.IsRunning)
         {
             WriteLog(ScriptMessageFormatter.RuntimeFinished());
+
+            if (RuntimeFinished != null)
+            {
+                RuntimeFinished();
+            }
         }
+    }
+
+    private void HandleExecutionLineChanged(int lineNumber)
+    {
+        if (ExecutionLineChanged != null)
+        {
+            ExecutionLineChanged(lineNumber);
+        }
+    }
+
+    private void HandleRuntimeErrorRaised(int lineNumber, string message)
+    {
+        RaiseRuntimeError(lineNumber, message);
+    }
+
+    private void RaiseRuntimeError(int lineNumber, string message)
+    {
+        if (RuntimeErrorRaised != null)
+        {
+            RuntimeErrorRaised(lineNumber, message);
+        }
+
+        WriteError(message);
+    }
+
+    private static int ExtractLineNumber(string message)
+    {
+        if (string.IsNullOrWhiteSpace(message))
+        {
+            return -1;
+        }
+
+        Match match = Regex.Match(message, @"\bLine\s+(\d+)\b");
+
+        if (!match.Success)
+        {
+            return -1;
+        }
+
+        int lineNumber;
+        bool success = int.TryParse(match.Groups[1].Value, out lineNumber);
+
+        if (!success)
+        {
+            return -1;
+        }
+
+        return lineNumber;
     }
 
     private void WriteLog(string message)

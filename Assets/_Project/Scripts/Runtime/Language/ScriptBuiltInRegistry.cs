@@ -28,6 +28,11 @@ public sealed class ScriptBuiltInRegistry
         return _definitions.TryGetValue(name, out definition);
     }
 
+    public IReadOnlyCollection<ScriptBuiltInDefinition> GetDefinitions()
+    {
+        return _definitions.Values;
+    }
+
     private void RegisterAction(string name, bool unlockedByDefault, string requiredUpgradeId, string description)
     {
         ScriptBuiltInDefinition definition = new ScriptBuiltInDefinition();

@@ -17,9 +17,12 @@ public sealed class CodeViewerPresenter : MonoBehaviour
     [SerializeField] private Image _selectionVisualPrefab;
     [SerializeField] private CodeEditorPointerBridge _pointerBridge;
     [SerializeField] private RectTransform _currentLineHighlight;
-    [SerializeField] private bool _showCurrentLineHighlight = true;
     [SerializeField] private float _currentLineHighlightExtraWidth = 32f;
     [SerializeField] private RectTransform _codeViewportRect;
+
+    [Header("Runtime Line Highlights")]
+    [SerializeField] private Color _executionLineHighlightColor = new Color(1f, 0.85f, 0.2f, 0.18f);
+    [SerializeField] private Color _errorLineHighlightColor = new Color(1f, 0.25f, 0.25f, 0.22f);
 
     [Header("Layout")]
     [SerializeField] private float _topPadding = 8f;
@@ -72,6 +75,10 @@ public sealed class CodeViewerPresenter : MonoBehaviour
     private bool _hasAppliedSourceText;
     private readonly CodeDocument _document = new CodeDocument();
     private readonly CodeEditorState _editorState = new CodeEditorState();
+    private RectTransform _executionLineHighlight;
+    private RectTransform _errorLineHighlight;
+    private int _executionLineIndex = -1;
+    private int _errorLineIndex = -1;
 
     private void Update()
     {
@@ -123,9 +130,12 @@ public sealed class CodeViewerPresenter : MonoBehaviour
         Canvas.ForceUpdateCanvases();
 
         ApplySelectionRootLayout();
+        EnsureRuntimeHighlightVisuals();
         RefreshCaretVisual();
         RefreshSelectionVisual();
         RefreshCurrentLineHighlight();
+        RefreshExecutionLineHighlight();
+        RefreshErrorLineHighlight();
 
         if (_scrollRect != null && snapToTop)
         {
@@ -550,40 +560,68 @@ public sealed class CodeViewerPresenter : MonoBehaviour
         RectTransform codeRect = _codeRichText.rectTransform;
         TMP_TextInfo textInfo = _codeRichText.textInfo;
 
+        if (_document == null)
+        {
+            return new Vector2(codeRect.anchoredPosition.x, codeRect.anchoredPosition.y);
+        }
+
+        int documentLineCount = _document.LineCount;
+
+        if (documentLineCount <= 0)
+        {
+            return new Vector2(codeRect.anchoredPosition.x, codeRect.anchoredPosition.y);
+        }
+
+        int safeDocumentLineIndex = lineIndex;
+
+        if (safeDocumentLineIndex < 0)
+        {
+            safeDocumentLineIndex = 0;
+        }
+
+        if (safeDocumentLineIndex >= documentLineCount)
+        {
+            safeDocumentLineIndex = documentLineCount - 1;
+        }
+
         if (textInfo == null || textInfo.lineCount <= 0)
         {
             return new Vector2(codeRect.anchoredPosition.x, codeRect.anchoredPosition.y);
         }
 
-        int safeLineIndex = lineIndex;
+        bool isRealTrailingDocumentLine =
+            safeDocumentLineIndex == documentLineCount - 1 &&
+            safeDocumentLineIndex >= textInfo.lineCount;
 
-        if (safeLineIndex < 0)
+        int safeRenderedLineIndex = safeDocumentLineIndex;
+
+        if (safeRenderedLineIndex < 0)
         {
-            safeLineIndex = 0;
+            safeRenderedLineIndex = 0;
         }
 
-        if (safeLineIndex >= textInfo.lineCount)
+        if (safeRenderedLineIndex >= textInfo.lineCount)
         {
-            safeLineIndex = textInfo.lineCount - 1;
+            safeRenderedLineIndex = textInfo.lineCount - 1;
         }
 
-        TMP_LineInfo lineInfo = textInfo.lineInfo[safeLineIndex];
-        float x = codeRect.anchoredPosition.x;
-        float y = codeRect.anchoredPosition.y + lineInfo.ascender;
+        TMP_LineInfo renderedLineInfo = textInfo.lineInfo[safeRenderedLineIndex];
 
-        bool isTrailingVirtualLine = lineIndex >= textInfo.lineCount;
-
-        if (isTrailingVirtualLine)
+        if (isRealTrailingDocumentLine)
         {
-            float virtualLineHeight = GetCaretLineHeight(safeLineIndex);
-            return new Vector2(x + lineInfo.lineExtents.min.x, y - virtualLineHeight);
+            float previousLineHeight = GetCaretLineHeight(safeRenderedLineIndex);
+            float previousLineY = codeRect.anchoredPosition.y + renderedLineInfo.ascender;
+            float trailingLineY = previousLineY - previousLineHeight;
+
+            return new Vector2(codeRect.anchoredPosition.x, trailingLineY);
         }
 
-        int lineLength = _document.GetLineLength(lineIndex);
+        float y = codeRect.anchoredPosition.y + renderedLineInfo.ascender;
+        int lineLength = _document.GetLineLength(safeDocumentLineIndex);
 
         if (lineLength <= 0 || columnIndex <= 0)
         {
-            return new Vector2(x + lineInfo.lineExtents.min.x, y);
+            return new Vector2(codeRect.anchoredPosition.x, y);
         }
 
         int safeColumnIndex = columnIndex;
@@ -593,12 +631,12 @@ public sealed class CodeViewerPresenter : MonoBehaviour
             safeColumnIndex = lineLength;
         }
 
-        int firstCharacterIndex = lineInfo.firstCharacterIndex;
-        int lastCharacterIndex = lineInfo.lastCharacterIndex;
+        int firstCharacterIndex = renderedLineInfo.firstCharacterIndex;
+        int lastCharacterIndex = renderedLineInfo.lastCharacterIndex;
 
         if (firstCharacterIndex < 0 || lastCharacterIndex < firstCharacterIndex)
         {
-            return new Vector2(x + lineInfo.lineExtents.min.x, y);
+            return new Vector2(codeRect.anchoredPosition.x, y);
         }
 
         if (safeColumnIndex >= lineLength)
@@ -621,7 +659,7 @@ public sealed class CodeViewerPresenter : MonoBehaviour
         }
 
         TMP_CharacterInfo characterInfo = textInfo.characterInfo[renderedCharacterIndex];
-        x = codeRect.anchoredPosition.x + characterInfo.topRight.x;
+        float x = codeRect.anchoredPosition.x + characterInfo.topRight.x;
 
         return new Vector2(x, y);
     }
@@ -1059,14 +1097,14 @@ public sealed class CodeViewerPresenter : MonoBehaviour
         return _document.GetLineIndexFromCharacterIndex(_editorState.CaretIndex);
     }
 
-    public void RefreshCurrentLineHighlight()
+    private void RefreshCurrentLineHighlight()
     {
         if (_currentLineHighlight == null)
         {
             return;
         }
 
-        if (!_showCurrentLineHighlight)
+        if (!_hasAppliedSourceText || _document == null)
         {
             _currentLineHighlight.gameObject.SetActive(false);
             return;
@@ -1074,40 +1112,253 @@ public sealed class CodeViewerPresenter : MonoBehaviour
 
         TMP_TextInfo textInfo = _codeRichText.textInfo;
 
-        if (textInfo == null || textInfo.lineCount <= 0)
+        if (textInfo == null || textInfo.lineCount <= 0 || _document.LineCount <= 0)
         {
             _currentLineHighlight.gameObject.SetActive(false);
             return;
         }
 
-        int caretLineIndex = _document.GetLineIndexFromCharacterIndex(_editorState.CaretIndex);
-        int safeLineIndex = caretLineIndex;
+        int caretIndex = _editorState.CaretIndex;
+        int lineIndex = _document.GetLineIndexFromCharacterIndex(caretIndex);
 
-        if (safeLineIndex < 0)
+        if (lineIndex < 0)
         {
-            safeLineIndex = 0;
+            lineIndex = 0;
         }
+
+        if (lineIndex >= _document.LineCount)
+        {
+            lineIndex = _document.LineCount - 1;
+        }
+
+        Rect highlightArea = GetLineHighlightRect(lineIndex, _currentLineHighlightExtraWidth);
+
+        _currentLineHighlight.gameObject.SetActive(true);
+        _currentLineHighlight.anchorMin = new Vector2(0f, 1f);
+        _currentLineHighlight.anchorMax = new Vector2(0f, 1f);
+        _currentLineHighlight.pivot = new Vector2(0f, 1f);
+        _currentLineHighlight.anchoredPosition = new Vector2(highlightArea.x, highlightArea.y);
+        _currentLineHighlight.SetSizeWithCurrentAnchors(RectTransform.Axis.Horizontal, highlightArea.width);
+        _currentLineHighlight.SetSizeWithCurrentAnchors(RectTransform.Axis.Vertical, highlightArea.height);
+    }
+
+    public void SetExecutionLine(int lineIndex)
+    {
+        _executionLineIndex = lineIndex;
+        RefreshExecutionLineHighlight();
+    }
+
+    public void ClearExecutionLine()
+    {
+        _executionLineIndex = -1;
+        RefreshExecutionLineHighlight();
+    }
+
+    public void SetErrorLine(int lineIndex)
+    {
+        _errorLineIndex = lineIndex;
+        RefreshErrorLineHighlight();
+    }
+
+    public void ClearErrorLine()
+    {
+        _errorLineIndex = -1;
+        RefreshErrorLineHighlight();
+    }
+
+    public void ClearRuntimeLineState()
+    {
+        _executionLineIndex = -1;
+        _errorLineIndex = -1;
+        RefreshExecutionLineHighlight();
+        RefreshErrorLineHighlight();
+    }
+
+    public void RefreshExecutionLineHighlight()
+    {
+        RefreshRuntimeHighlight(_executionLineHighlight, _executionLineIndex);
+    }
+
+    public void RefreshErrorLineHighlight()
+    {
+        RefreshRuntimeHighlight(_errorLineHighlight, _errorLineIndex);
+    }
+
+    private void EnsureRuntimeHighlightVisuals()
+    {
+        if (_contentRect == null)
+        {
+            return;
+        }
+
+        _executionLineHighlight = EnsureRuntimeHighlightVisual(_executionLineHighlight, "ExecutionLineHighlight", _executionLineHighlightColor);
+        _errorLineHighlight = EnsureRuntimeHighlightVisual(_errorLineHighlight, "ErrorLineHighlight", _errorLineHighlightColor);
+
+        if (_executionLineHighlight != null)
+        {
+            _executionLineHighlight.SetAsFirstSibling();
+        }
+
+        if (_errorLineHighlight != null)
+        {
+            _errorLineHighlight.SetAsFirstSibling();
+        }
+    }
+
+    private RectTransform EnsureRuntimeHighlightVisual(RectTransform existing, string objectName, Color color)
+    {
+        if (existing == null)
+        {
+            Transform child = _contentRect.Find(objectName);
+
+            if (child != null)
+            {
+                existing = child as RectTransform;
+            }
+        }
+
+        if (existing == null)
+        {
+            GameObject highlightObject = new GameObject(objectName, typeof(RectTransform), typeof(Image));
+            RectTransform rectTransform = highlightObject.GetComponent<RectTransform>();
+            rectTransform.SetParent(_contentRect, false);
+
+            Image image = highlightObject.GetComponent<Image>();
+            image.raycastTarget = false;
+            image.color = color;
+
+            existing = rectTransform;
+        }
+
+        Image existingImage = existing.GetComponent<Image>();
+
+        if (existingImage != null)
+        {
+            existingImage.raycastTarget = false;
+            existingImage.color = color;
+        }
+
+        existing.anchorMin = new Vector2(0f, 1f);
+        existing.anchorMax = new Vector2(0f, 1f);
+        existing.pivot = new Vector2(0f, 1f);
+        existing.gameObject.SetActive(false);
+        return existing;
+    }
+
+    private void RefreshRuntimeHighlight(RectTransform highlightRect, int lineIndex)
+    {
+        if (highlightRect == null)
+        {
+            return;
+        }
+
+        if (!_hasAppliedSourceText || lineIndex < 0)
+        {
+            highlightRect.gameObject.SetActive(false);
+            return;
+        }
+
+        TMP_TextInfo textInfo = _codeRichText.textInfo;
+
+        if (textInfo == null || textInfo.lineCount <= 0)
+        {
+            highlightRect.gameObject.SetActive(false);
+            return;
+        }
+
+        int safeLineIndex = lineIndex;
 
         if (safeLineIndex >= textInfo.lineCount)
         {
             safeLineIndex = textInfo.lineCount - 1;
         }
 
-        TMP_LineInfo lineInfo = textInfo.lineInfo[safeLineIndex];
+        if (safeLineIndex < 0)
+        {
+            safeLineIndex = 0;
+        }
+
+        Rect highlightArea = GetLineHighlightRect(safeLineIndex, _currentLineHighlightExtraWidth);
+
+        highlightRect.gameObject.SetActive(true);
+        highlightRect.anchorMin = new Vector2(0f, 1f);
+        highlightRect.anchorMax = new Vector2(0f, 1f);
+        highlightRect.pivot = new Vector2(0f, 1f);
+        highlightRect.anchoredPosition = new Vector2(highlightArea.x, highlightArea.y);
+        highlightRect.SetSizeWithCurrentAnchors(RectTransform.Axis.Horizontal, highlightArea.width);
+        highlightRect.SetSizeWithCurrentAnchors(RectTransform.Axis.Vertical, highlightArea.height);
+    }
+
+    private Rect GetLineHighlightRect(int lineIndex, float extraWidth)
+    {
+        TMP_TextInfo textInfo = _codeRichText.textInfo;
         RectTransform codeRect = _codeRichText.rectTransform;
 
-        float lineHeight = GetCaretLineHeight(safeLineIndex);
-        float yTop = codeRect.anchoredPosition.y + lineInfo.ascender;
-        float x = codeRect.anchoredPosition.x + lineInfo.lineExtents.min.x;
-        float width = _codeRichText.rectTransform.rect.width + _currentLineHighlightExtraWidth;
+        if (_document == null || textInfo == null || textInfo.lineCount <= 0)
+        {
+            return new Rect(
+                codeRect.anchoredPosition.x,
+                codeRect.anchoredPosition.y,
+                codeRect.rect.width + extraWidth,
+                GetDefaultLineHeight()
+            );
+        }
 
-        _currentLineHighlight.gameObject.SetActive(true);
-        _currentLineHighlight.anchorMin = new Vector2(0f, 1f);
-        _currentLineHighlight.anchorMax = new Vector2(0f, 1f);
-        _currentLineHighlight.pivot = new Vector2(0f, 1f);
-        _currentLineHighlight.anchoredPosition = new Vector2(x, yTop);
-        _currentLineHighlight.SetSizeWithCurrentAnchors(RectTransform.Axis.Horizontal, width);
-        _currentLineHighlight.SetSizeWithCurrentAnchors(RectTransform.Axis.Vertical, lineHeight);
+        int documentLineCount = _document.LineCount;
+
+        if (documentLineCount <= 0)
+        {
+            return new Rect(
+                codeRect.anchoredPosition.x,
+                codeRect.anchoredPosition.y,
+                codeRect.rect.width + extraWidth,
+                GetDefaultLineHeight()
+            );
+        }
+
+        int safeDocumentLineIndex = lineIndex;
+
+        if (safeDocumentLineIndex < 0)
+        {
+            safeDocumentLineIndex = 0;
+        }
+
+        if (safeDocumentLineIndex >= documentLineCount)
+        {
+            safeDocumentLineIndex = documentLineCount - 1;
+        }
+
+        bool isRealTrailingDocumentLine =
+            safeDocumentLineIndex == documentLineCount - 1 &&
+            safeDocumentLineIndex >= textInfo.lineCount;
+
+        int safeRenderedLineIndex = safeDocumentLineIndex;
+
+        if (safeRenderedLineIndex < 0)
+        {
+            safeRenderedLineIndex = 0;
+        }
+
+        if (safeRenderedLineIndex >= textInfo.lineCount)
+        {
+            safeRenderedLineIndex = textInfo.lineCount - 1;
+        }
+
+        TMP_LineInfo renderedLineInfo = textInfo.lineInfo[safeRenderedLineIndex];
+        float lineHeight = GetCaretLineHeight(safeRenderedLineIndex);
+        float x = codeRect.anchoredPosition.x;
+        float width = codeRect.rect.width + extraWidth;
+
+        if (isRealTrailingDocumentLine)
+        {
+            float previousLineY = codeRect.anchoredPosition.y + renderedLineInfo.ascender;
+            float trailingLineY = previousLineY - lineHeight;
+
+            return new Rect(x, trailingLineY, width, lineHeight);
+        }
+
+        float yTop = codeRect.anchoredPosition.y + renderedLineInfo.ascender;
+        return new Rect(x, yTop, width, lineHeight);
     }
 
     public void EnsureCaretVisibleHorizontally()
@@ -1182,6 +1433,144 @@ public sealed class CodeViewerPresenter : MonoBehaviour
         Vector2 anchoredPosition = _contentRect.anchoredPosition;
         anchoredPosition.x = 0f;
         _contentRect.anchoredPosition = anchoredPosition;
+    }
+
+    public void RevealLine(int lineIndex)
+    {
+        if (_scrollRect == null || _viewportRect == null || _contentRect == null || _codeRichText == null)
+        {
+            return;
+        }
+
+        TMP_TextInfo textInfo = _codeRichText.textInfo;
+        if (textInfo == null || textInfo.lineCount <= 0)
+        {
+            return;
+        }
+
+        int safeLineIndex = lineIndex;
+
+        if (safeLineIndex < 0)
+        {
+            safeLineIndex = 0;
+        }
+
+        if (safeLineIndex >= textInfo.lineCount)
+        {
+            safeLineIndex = textInfo.lineCount - 1;
+        }
+
+        TMP_LineInfo lineInfo = textInfo.lineInfo[safeLineIndex];
+        RectTransform codeRect = _codeRichText.rectTransform;
+
+        float lineTop = -(codeRect.anchoredPosition.y + lineInfo.ascender);
+        float lineBottom = lineTop + GetCaretLineHeight(safeLineIndex);
+
+        float viewportHeight = _viewportRect.rect.height;
+        float contentHeight = _contentRect.rect.height;
+        float currentScrollY = _contentRect.anchoredPosition.y;
+
+        float visibleTop = currentScrollY;
+        float visibleBottom = currentScrollY + viewportHeight;
+
+        float targetScrollY = currentScrollY;
+
+        if (lineTop < visibleTop)
+        {
+            targetScrollY = lineTop;
+        }
+        else if (lineBottom > visibleBottom)
+        {
+            targetScrollY = lineBottom - viewportHeight;
+        }
+
+        float maxScrollY = Mathf.Max(0f, contentHeight - viewportHeight);
+
+        if (targetScrollY < 0f)
+        {
+            targetScrollY = 0f;
+        }
+
+        if (targetScrollY > maxScrollY)
+        {
+            targetScrollY = maxScrollY;
+        }
+
+        Vector2 anchoredPosition = _contentRect.anchoredPosition;
+        anchoredPosition.y = targetScrollY;
+        _contentRect.anchoredPosition = anchoredPosition;
+    }
+
+    public void SetExecutionLineAndReveal(int lineIndex)
+    {
+        SetExecutionLine(lineIndex);
+        RevealLine(lineIndex);
+    }
+
+    public void SetErrorLineAndReveal(int lineIndex)
+    {
+        SetErrorLine(lineIndex);
+        RevealLine(lineIndex);
+    }
+
+    private float GetDefaultLineHeight()
+    {
+        if (_codeRichText != null && _codeRichText.fontSize > 0f)
+        {
+            return _codeRichText.fontSize * 1.2f;
+        }
+
+        return 24f;
+    }
+
+public Vector2 GetCompletionPopupAnchorLocalPosition(RectTransform popupRect)
+{
+    if (popupRect == null || _document == null || _contentRect == null)
+    {
+        return Vector2.zero;
+    }
+
+    RectTransform parentRect = popupRect.parent as RectTransform;
+
+    if (parentRect == null)
+    {
+        return Vector2.zero;
+    }
+
+    int caretIndex = _editorState.CaretIndex;
+    int lineIndex = _document.GetLineIndexFromCharacterIndex(caretIndex);
+    int columnIndex = _document.GetColumnFromCharacterIndex(caretIndex);
+
+    Vector2 caretLocalInContent = GetCaretLocalPosition(lineIndex, columnIndex);
+    float lineHeight = GetCurrentCaretLineHeight();
+
+    Vector3 worldPoint = _contentRect.TransformPoint(new Vector3(caretLocalInContent.x, caretLocalInContent.y - lineHeight, 0f));
+    Vector3 localPointInParent = parentRect.InverseTransformPoint(worldPoint);
+
+    return new Vector2(localPointInParent.x, localPointInParent.y);
+}
+
+    public RectTransform GetCodeViewportRect()
+    {
+        return _codeViewportRect;
+    }
+
+    private float GetCurrentCaretLineHeight()
+    {
+        if (_document == null || _codeRichText == null || _codeRichText.textInfo == null || _codeRichText.textInfo.lineCount <= 0)
+        {
+            return GetDefaultLineHeight();
+        }
+
+        int caretIndex = _editorState.CaretIndex;
+        int lineIndex = _document.GetLineIndexFromCharacterIndex(caretIndex);
+
+        if (lineIndex < 0)
+        {
+            lineIndex = 0;
+        }
+
+        return GetCaretLineHeight(lineIndex);
     }
 
 }

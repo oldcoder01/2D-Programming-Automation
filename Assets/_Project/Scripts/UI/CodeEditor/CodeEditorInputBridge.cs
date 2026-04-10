@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using TMPro;
 using UnityEngine;
 using UnityEngine.EventSystems;
@@ -9,6 +10,7 @@ public sealed class CodeEditorInputBridge : MonoBehaviour
 {
     [SerializeField] private TMP_InputField _hiddenInputField;
     [SerializeField] private CodeViewerPresenter _viewerPresenter;
+    [SerializeField] private CodeCompletionPopupUI _completionPopup;
     [SerializeField] private TMP_Text _debugCaretText;
     [SerializeField] private float _keyRepeatDelay = 0.4f;
     [SerializeField] private float _keyRepeatRate = 0.05f;
@@ -24,9 +26,13 @@ public sealed class CodeEditorInputBridge : MonoBehaviour
     private bool _restoreScrollNextLateUpdate;
     private float _restoredScrollY;
 
+    private readonly CodeCompletionProvider _completionProvider = new CodeCompletionProvider();
+    private readonly List<CodeCompletionItem> _completionItems = new List<CodeCompletionItem>();
+    private CodeCompletionContext _completionContext;
+
     private void Start()
     {
-        if (_hiddenInputField == null || _viewerPresenter == null)
+        if (_hiddenInputField == null || _viewerPresenter == null || _completionPopup == null)
         {
             Debug.LogError("CodeEditorInputBridge is missing required references.");
             enabled = false;
@@ -44,6 +50,11 @@ public sealed class CodeEditorInputBridge : MonoBehaviour
         _hiddenInputField.onValueChanged.AddListener(HandleInputValueChanged);
         _hiddenInputField.onSubmit.AddListener(HandleInputSubmitted);
 
+        _completionPopup.SelectionChanged += HandleCompletionSelectionChanged;
+        _completionPopup.ItemClicked += HandleCompletionItemClicked;
+        _completionPopup.Hide();
+        _completionPopup.InitializeFromReferenceText(_viewerPresenter.GetCodeText());
+
         ActivateHiddenInputField();
         ResetHiddenInputField();
         RefreshDebugCaretText();
@@ -55,6 +66,12 @@ public sealed class CodeEditorInputBridge : MonoBehaviour
         {
             _hiddenInputField.onValueChanged.RemoveListener(HandleInputValueChanged);
             _hiddenInputField.onSubmit.RemoveListener(HandleInputSubmitted);
+        }
+
+        if (_completionPopup != null)
+        {
+            _completionPopup.SelectionChanged -= HandleCompletionSelectionChanged;
+            _completionPopup.ItemClicked -= HandleCompletionItemClicked;
         }
     }
 
@@ -73,6 +90,8 @@ public sealed class CodeEditorInputBridge : MonoBehaviour
         {
             EventSystem.current.sendNavigationEvents = _previousSendNavigationEvents;
         }
+
+        HideCompletionPopup();
     }
 
     private void LateUpdate()
@@ -116,6 +135,13 @@ public sealed class CodeEditorInputBridge : MonoBehaviour
         bool commandHeld = keyboard.leftMetaKey.isPressed || keyboard.rightMetaKey.isPressed;
         bool actionHeld = ctrlHeld || commandHeld;
 
+        if (keyboard.escapeKey.wasPressedThisFrame && IsCompletionPopupOpen())
+        {
+            HideCompletionPopup();
+            ResetHiddenInputField();
+            return;
+        }
+
         if (actionHeld && keyboard.cKey.wasPressedThisFrame)
         {
             HandleCopy();
@@ -156,6 +182,8 @@ public sealed class CodeEditorInputBridge : MonoBehaviour
 
         if (keyboard.pageUpKey.wasPressedThisFrame)
         {
+            HideCompletionPopup();
+
             if (shiftHeld)
             {
                 HandleMoveCaretPageUpWithSelection();
@@ -171,6 +199,8 @@ public sealed class CodeEditorInputBridge : MonoBehaviour
 
         if (keyboard.pageDownKey.wasPressedThisFrame)
         {
+            HideCompletionPopup();
+
             if (shiftHeld)
             {
                 HandleMoveCaretPageDownWithSelection();
@@ -186,6 +216,8 @@ public sealed class CodeEditorInputBridge : MonoBehaviour
 
         if (keyboard.homeKey.wasPressedThisFrame)
         {
+            HideCompletionPopup();
+
             if (actionHeld)
             {
                 if (shiftHeld)
@@ -216,6 +248,8 @@ public sealed class CodeEditorInputBridge : MonoBehaviour
 
         if (keyboard.endKey.wasPressedThisFrame)
         {
+            HideCompletionPopup();
+
             if (actionHeld)
             {
                 if (shiftHeld)
@@ -246,6 +280,14 @@ public sealed class CodeEditorInputBridge : MonoBehaviour
 
         if (ShouldProcessRepeat(keyboard.upArrowKey))
         {
+            if (IsCompletionPopupOpen() && !shiftHeld)
+            {
+                _completionPopup.MoveSelection(-1);
+                return;
+            }
+
+            HideCompletionPopup();
+
             if (shiftHeld)
             {
                 HandleMoveCaretUpWithSelection();
@@ -261,6 +303,14 @@ public sealed class CodeEditorInputBridge : MonoBehaviour
 
         if (ShouldProcessRepeat(keyboard.downArrowKey))
         {
+            if (IsCompletionPopupOpen() && !shiftHeld)
+            {
+                _completionPopup.MoveSelection(1);
+                return;
+            }
+
+            HideCompletionPopup();
+
             if (shiftHeld)
             {
                 HandleMoveCaretDownWithSelection();
@@ -276,6 +326,8 @@ public sealed class CodeEditorInputBridge : MonoBehaviour
 
         if (ShouldProcessRepeat(keyboard.leftArrowKey))
         {
+            HideCompletionPopup();
+
             if (actionHeld)
             {
                 if (shiftHeld)
@@ -306,6 +358,8 @@ public sealed class CodeEditorInputBridge : MonoBehaviour
 
         if (ShouldProcessRepeat(keyboard.rightArrowKey))
         {
+            HideCompletionPopup();
+
             if (actionHeld)
             {
                 if (shiftHeld)
@@ -369,12 +423,24 @@ public sealed class CodeEditorInputBridge : MonoBehaviour
 
         if (keyboard.enterKey.wasPressedThisFrame || keyboard.numpadEnterKey.wasPressedThisFrame)
         {
+            if (TryCommitCompletion())
+            {
+                return;
+            }
+
             HandleSmartEnter();
             return;
         }
 
         if (keyboard.tabKey.wasPressedThisFrame)
         {
+            if (!shiftHeld && TryCommitCompletion())
+            {
+                return;
+            }
+
+            HideCompletionPopup();
+
             if (_viewerPresenter.HasSelection())
             {
                 if (shiftHeld)
@@ -443,6 +509,7 @@ public sealed class CodeEditorInputBridge : MonoBehaviour
             _viewerPresenter.RebuildFromDocument(false);
             RefreshDebugCaretText();
             ResetHiddenInputField();
+            RefreshCompletionSuggestions();
             return;
         }
 
@@ -455,6 +522,7 @@ public sealed class CodeEditorInputBridge : MonoBehaviour
         _viewerPresenter.RebuildFromDocument(false);
         RefreshDebugCaretText();
         ResetHiddenInputField();
+        RefreshCompletionSuggestions();
     }
 
     private void HandleBackspace()
@@ -474,6 +542,7 @@ public sealed class CodeEditorInputBridge : MonoBehaviour
             _viewerPresenter.RebuildFromDocument(false);
             RefreshDebugCaretText();
             ResetHiddenInputField();
+            RefreshCompletionSuggestions();
             return;
         }
 
@@ -510,6 +579,7 @@ public sealed class CodeEditorInputBridge : MonoBehaviour
                 _viewerPresenter.RebuildFromDocument(false);
                 RefreshDebugCaretText();
                 ResetHiddenInputField();
+                RefreshCompletionSuggestions();
                 return;
             }
         }
@@ -519,6 +589,7 @@ public sealed class CodeEditorInputBridge : MonoBehaviour
         _viewerPresenter.RebuildFromDocument(false);
         RefreshDebugCaretText();
         ResetHiddenInputField();
+        RefreshCompletionSuggestions();
     }
 
     private void HandleDelete()
@@ -537,6 +608,7 @@ public sealed class CodeEditorInputBridge : MonoBehaviour
             _viewerPresenter.RebuildFromDocument(false);
             RefreshDebugCaretText();
             ResetHiddenInputField();
+            RefreshCompletionSuggestions();
             return;
         }
 
@@ -553,6 +625,7 @@ public sealed class CodeEditorInputBridge : MonoBehaviour
         _viewerPresenter.RebuildFromDocument(false);
         RefreshDebugCaretText();
         ResetHiddenInputField();
+        RefreshCompletionSuggestions();
     }
 
     private void ResetHiddenInputField()
@@ -858,6 +931,7 @@ public sealed class CodeEditorInputBridge : MonoBehaviour
 
     private void HandleCut()
     {
+        HideCompletionPopup();
         _viewerPresenter.BreakTypingHistoryGroup();
 
         if (!_viewerPresenter.HasSelection())
@@ -960,6 +1034,7 @@ public sealed class CodeEditorInputBridge : MonoBehaviour
 
     private void HandleSelectAll()
     {
+        HideCompletionPopup();
         _viewerPresenter.BreakTypingHistoryGroup();
         CodeDocument document = _viewerPresenter.GetDocument();
 
@@ -1053,6 +1128,7 @@ public sealed class CodeEditorInputBridge : MonoBehaviour
 
     private void HandleDeleteWordLeft()
     {
+        HideCompletionPopup();
         _viewerPresenter.BreakTypingHistoryGroup();
         CodeDocument document = _viewerPresenter.GetDocument();
         PushHistoryForNonTypingAction("block_edit");
@@ -1089,6 +1165,7 @@ public sealed class CodeEditorInputBridge : MonoBehaviour
 
     private void HandleDeleteWordRight()
     {
+        HideCompletionPopup();
         _viewerPresenter.BreakTypingHistoryGroup();
         CodeDocument document = _viewerPresenter.GetDocument();
         PushHistoryForNonTypingAction("block_edit");
@@ -1209,6 +1286,7 @@ public sealed class CodeEditorInputBridge : MonoBehaviour
 
     private void HandleUndo()
     {
+        HideCompletionPopup();
         _viewerPresenter.BreakTypingHistoryGroup();
         bool success = _viewerPresenter.Undo();
 
@@ -1223,6 +1301,7 @@ public sealed class CodeEditorInputBridge : MonoBehaviour
 
     private void HandleRedo()
     {
+        HideCompletionPopup();
         _viewerPresenter.BreakTypingHistoryGroup();
         bool success = _viewerPresenter.Redo();
 
@@ -1396,23 +1475,6 @@ public sealed class CodeEditorInputBridge : MonoBehaviour
         return 0;
     }
 
-    private int GetFirstNonWhitespaceColumn(string lineText)
-    {
-        if (string.IsNullOrEmpty(lineText))
-        {
-            return 0;
-        }
-
-        int columnIndex = 0;
-
-        while (columnIndex < lineText.Length && char.IsWhiteSpace(lineText[columnIndex]))
-        {
-            columnIndex++;
-        }
-
-        return columnIndex;
-    }
-
     private void DisableSelectableNavigation(Selectable selectable)
     {
         if (selectable == null)
@@ -1445,13 +1507,54 @@ public sealed class CodeEditorInputBridge : MonoBehaviour
 
     private void HandleSmartEnter()
     {
+        HideCompletionPopup();
+
         CodeDocument document = _viewerPresenter.GetDocument();
         int caretIndex = _viewerPresenter.GetCaretIndex();
         int lineIndex = document.GetLineIndexFromCharacterIndex(caretIndex);
+        int lineStartIndex = document.GetLineStartIndex(lineIndex);
+        int lineEndIndex = document.GetLineEndIndexExclusive(lineIndex);
         string lineText = document.GetLineText(lineIndex);
         string leadingWhitespace = document.GetLeadingWhitespace(lineIndex);
 
-        string extraIndent = string.Empty;
+        int caretColumnInLine = caretIndex - lineStartIndex;
+        int lineLength = lineEndIndex - lineStartIndex;
+
+        if (caretColumnInLine < 0)
+        {
+            caretColumnInLine = 0;
+        }
+
+        if (caretColumnInLine > lineLength)
+        {
+            caretColumnInLine = lineLength;
+        }
+
+        bool lineIsWhitespaceOnly = string.IsNullOrWhiteSpace(lineText);
+        bool caretAtEndOfIndentOnlyLine = lineIsWhitespaceOnly && caretColumnInLine >= leadingWhitespace.Length;
+
+        if (caretAtEndOfIndentOnlyLine)
+        {
+            string nextLineIndent = leadingWhitespace;
+
+            if (leadingWhitespace.Length >= 4 && leadingWhitespace.EndsWith("    "))
+            {
+                nextLineIndent = leadingWhitespace.Substring(0, leadingWhitespace.Length - 4);
+            }
+            else if (leadingWhitespace.Length >= 1 && leadingWhitespace.EndsWith("\t"))
+            {
+                nextLineIndent = leadingWhitespace.Substring(0, leadingWhitespace.Length - 1);
+            }
+            else
+            {
+                nextLineIndent = string.Empty;
+            }
+
+            HandleInsertText("\n" + nextLineIndent);
+            return;
+        }
+
+        string indentText = leadingWhitespace;
 
         if (!string.IsNullOrEmpty(lineText))
         {
@@ -1459,10 +1562,213 @@ public sealed class CodeEditorInputBridge : MonoBehaviour
 
             if (trimmedLine.EndsWith(":"))
             {
-                extraIndent = "    ";
+                indentText += "    ";
             }
         }
 
-        HandleInsertText("\n" + leadingWhitespace + extraIndent);
+        HandleInsertText("\n" + indentText);
+    }
+
+    private bool IsCompletionPopupOpen()
+    {
+        return _completionPopup != null && _completionPopup.IsOpen;
+    }
+
+    private void RefreshCompletionSuggestions()
+    {
+        if (_completionPopup == null || _viewerPresenter == null)
+        {
+            return;
+        }
+
+        if (_viewerPresenter.HasSelection())
+        {
+            HideCompletionPopup();
+            return;
+        }
+
+        CodeDocument document = _viewerPresenter.GetDocument();
+
+        if (document == null)
+        {
+            HideCompletionPopup();
+            return;
+        }
+
+        string previousSelectedLabel = null;
+
+        if (IsCompletionPopupOpen())
+        {
+            CodeCompletionItem previousSelectedItem = _completionPopup.GetSelectedItem();
+
+            if (previousSelectedItem != null)
+            {
+                previousSelectedLabel = previousSelectedItem.Label;
+            }
+        }
+
+        int caretIndex = _viewerPresenter.GetCaretIndex();
+        _completionContext = _completionProvider.BuildContext(document, caretIndex);
+
+        if (_completionContext == null || string.IsNullOrEmpty(_completionContext.Prefix))
+        {
+            HideCompletionPopup();
+            return;
+        }
+
+        _completionItems.Clear();
+        _completionItems.AddRange(_completionProvider.GetSuggestions(document, caretIndex));
+
+        if (_completionItems.Count <= 0)
+        {
+            HideCompletionPopup();
+            return;
+        }
+
+        int selectedIndex = FindCompletionSelectionIndex(_completionItems, previousSelectedLabel);
+        Vector2 popupPosition = _viewerPresenter.GetCompletionPopupAnchorLocalPosition(_completionPopup.GetComponent<RectTransform>());
+        _completionPopup.Show(_completionItems, selectedIndex, popupPosition, _viewerPresenter.GetCodeText());
+    }
+
+    private void HideCompletionPopup()
+    {
+        if (_completionPopup != null)
+        {
+            _completionPopup.Hide();
+        }
+
+        _completionItems.Clear();
+        _completionContext = null;
+
+    }
+
+    private void HandleCompletionSelectionChanged(CodeCompletionItem item)
+    {
+    }
+
+    private void HandleCompletionItemClicked(CodeCompletionItem item)
+    {
+        if (item == null)
+        {
+            return;
+        }
+
+        CommitCompletionItem(item);
+        ActivateHiddenInputField();
+        ResetHiddenInputField();
+    }
+
+    private bool TryCommitCompletion()
+    {
+        if (!IsCompletionPopupOpen())
+        {
+            return false;
+        }
+
+        CodeCompletionItem item = _completionPopup.GetSelectedItem();
+
+        if (item == null)
+        {
+            HideCompletionPopup();
+            return false;
+        }
+
+        CommitCompletionItem(item);
+        return true;
+    }
+
+    private void CommitCompletionItem(CodeCompletionItem item)
+    {
+        if (item == null)
+        {
+            return;
+        }
+
+        CodeDocument document = _viewerPresenter.GetDocument();
+
+        if (document == null)
+        {
+            return;
+        }
+
+        if (_completionContext == null)
+        {
+            HideCompletionPopup();
+            return;
+        }
+
+        PushHistoryForNonTypingAction("completion");
+
+        int replaceStart = _completionContext.ReplaceStartIndex;
+        int replaceEnd = _completionContext.ReplaceEndIndex;
+
+        if (replaceStart < 0)
+        {
+            replaceStart = 0;
+        }
+
+        if (replaceEnd < replaceStart)
+        {
+            replaceEnd = replaceStart;
+        }
+
+        int replaceLength = replaceEnd - replaceStart;
+        string insertText = BuildCommittedText(item);
+        int caretOffset = GetCommittedCaretOffset(item, insertText);
+
+        document.ReplaceText(replaceStart, replaceLength, insertText);
+        _viewerPresenter.SetCaretIndex(replaceStart + caretOffset);
+        _viewerPresenter.RebuildFromDocument(false);
+        RefreshDebugCaretText();
+        ResetHiddenInputField();
+        HideCompletionPopup();
+    }
+
+    private string BuildCommittedText(CodeCompletionItem item)
+    {
+        if (item == null)
+        {
+            return string.Empty;
+        }
+
+        if (item.Kind == CodeSymbolKind.Keyword)
+        {
+            if (item.Label == "def")
+            {
+                return "def ";
+            }
+
+            return item.InsertText;
+        }
+
+        return item.InsertText;
+    }
+
+    private int GetCommittedCaretOffset(CodeCompletionItem item, string insertedText)
+    {
+        if (string.IsNullOrEmpty(insertedText))
+        {
+            return 0;
+        }
+
+        return insertedText.Length;
+    }
+
+    private int FindCompletionSelectionIndex(List<CodeCompletionItem> items, string selectedLabel)
+    {
+        if (items == null || items.Count <= 0 || string.IsNullOrEmpty(selectedLabel))
+        {
+            return 0;
+        }
+
+        for (int i = 0; i < items.Count; i++)
+        {
+            if (items[i] != null && items[i].Label == selectedLabel)
+            {
+                return i;
+            }
+        }
+
+        return 0;
     }
 }
