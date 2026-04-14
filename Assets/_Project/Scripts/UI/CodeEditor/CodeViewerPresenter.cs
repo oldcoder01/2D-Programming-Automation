@@ -642,7 +642,7 @@ public sealed class CodeViewerPresenter : MonoBehaviour
         if (safeColumnIndex >= lineLength)
         {
             TMP_CharacterInfo lastCharacter = textInfo.characterInfo[lastCharacterIndex];
-            return new Vector2(codeRect.anchoredPosition.x + lastCharacter.topRight.x, y);
+            return new Vector2(codeRect.anchoredPosition.x + lastCharacter.xAdvance, y);
         }
 
         int characterIndexInLine = safeColumnIndex - 1;
@@ -659,7 +659,7 @@ public sealed class CodeViewerPresenter : MonoBehaviour
         }
 
         TMP_CharacterInfo characterInfo = textInfo.characterInfo[renderedCharacterIndex];
-        float x = codeRect.anchoredPosition.x + characterInfo.topRight.x;
+        float x = codeRect.anchoredPosition.x + characterInfo.xAdvance;
 
         return new Vector2(x, y);
     }
@@ -1523,32 +1523,32 @@ public sealed class CodeViewerPresenter : MonoBehaviour
         return 24f;
     }
 
-public Vector2 GetCompletionPopupAnchorLocalPosition(RectTransform popupRect)
-{
-    if (popupRect == null || _document == null || _contentRect == null)
+    public Vector2 GetCompletionPopupAnchorLocalPosition(RectTransform popupRect)
     {
-        return Vector2.zero;
+        if (popupRect == null || _document == null || _contentRect == null)
+        {
+            return Vector2.zero;
+        }
+
+        RectTransform parentRect = popupRect.parent as RectTransform;
+
+        if (parentRect == null)
+        {
+            return Vector2.zero;
+        }
+
+        int caretIndex = _editorState.CaretIndex;
+        int lineIndex = _document.GetLineIndexFromCharacterIndex(caretIndex);
+        int columnIndex = _document.GetColumnFromCharacterIndex(caretIndex);
+
+        Vector2 caretLocalInContent = GetCaretLocalPosition(lineIndex, columnIndex);
+        float lineHeight = GetCurrentCaretLineHeight();
+
+        Vector3 worldPoint = _contentRect.TransformPoint(new Vector3(caretLocalInContent.x, caretLocalInContent.y - lineHeight, 0f));
+        Vector3 localPointInParent = parentRect.InverseTransformPoint(worldPoint);
+
+        return new Vector2(localPointInParent.x, localPointInParent.y);
     }
-
-    RectTransform parentRect = popupRect.parent as RectTransform;
-
-    if (parentRect == null)
-    {
-        return Vector2.zero;
-    }
-
-    int caretIndex = _editorState.CaretIndex;
-    int lineIndex = _document.GetLineIndexFromCharacterIndex(caretIndex);
-    int columnIndex = _document.GetColumnFromCharacterIndex(caretIndex);
-
-    Vector2 caretLocalInContent = GetCaretLocalPosition(lineIndex, columnIndex);
-    float lineHeight = GetCurrentCaretLineHeight();
-
-    Vector3 worldPoint = _contentRect.TransformPoint(new Vector3(caretLocalInContent.x, caretLocalInContent.y - lineHeight, 0f));
-    Vector3 localPointInParent = parentRect.InverseTransformPoint(worldPoint);
-
-    return new Vector2(localPointInParent.x, localPointInParent.y);
-}
 
     public RectTransform GetCodeViewportRect()
     {
