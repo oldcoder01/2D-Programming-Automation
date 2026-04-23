@@ -25,6 +25,7 @@ public sealed class CodeEditorInputBridge : MonoBehaviour
     private float _nextRepeatTime;
     private bool _restoreScrollNextLateUpdate;
     private float _restoredScrollY;
+    private string _lastHiddenInputValue = string.Empty;
 
     private readonly CodeCompletionProvider _completionProvider = new CodeCompletionProvider();
     private readonly List<CodeCompletionItem> _completionItems = new List<CodeCompletionItem>();
@@ -481,12 +482,30 @@ public sealed class CodeEditorInputBridge : MonoBehaviour
             return;
         }
 
-        if (string.IsNullOrEmpty(value))
+        if (value == "\r")
+        {
+            _lastHiddenInputValue = value;
+            ResetHiddenInputField();
+            return;
+        }
+
+        string normalizedValue = NormalizeIncomingText(value);
+        string normalizedPreviousValue = NormalizeIncomingText(_lastHiddenInputValue);
+        _lastHiddenInputValue = value;
+
+        if (string.IsNullOrEmpty(normalizedValue))
         {
             return;
         }
 
-        HandleInsertText(value);
+        string insertValue = GetIncomingTextDelta(normalizedPreviousValue, normalizedValue);
+
+        if (string.IsNullOrEmpty(insertValue))
+        {
+            return;
+        }
+
+        HandleInsertText(insertValue);
     }
 
     private void HandleInputSubmitted(string value)
@@ -496,6 +515,14 @@ public sealed class CodeEditorInputBridge : MonoBehaviour
 
     private void HandleInsertText(string value)
     {
+        string normalizedValue = NormalizeIncomingText(value);
+
+        if (string.IsNullOrEmpty(normalizedValue))
+        {
+            ResetHiddenInputField();
+            return;
+        }
+
         CodeDocument document = _viewerPresenter.GetDocument();
         PushHistoryForTyping("insert");
 
@@ -504,8 +531,8 @@ public sealed class CodeEditorInputBridge : MonoBehaviour
             int selectionStart = _viewerPresenter.GetSelectionStart();
             int selectionEnd = _viewerPresenter.GetSelectionEnd();
 
-            document.ReplaceText(selectionStart, selectionEnd - selectionStart, value);
-            _viewerPresenter.SetCaretIndex(selectionStart + value.Length);
+            document.ReplaceText(selectionStart, selectionEnd - selectionStart, normalizedValue);
+            _viewerPresenter.SetCaretIndex(selectionStart + normalizedValue.Length);
             _viewerPresenter.RebuildFromDocument(false);
             RefreshDebugCaretText();
             ResetHiddenInputField();
@@ -515,8 +542,8 @@ public sealed class CodeEditorInputBridge : MonoBehaviour
 
         int caretIndex = _viewerPresenter.GetCaretIndex();
 
-        document.InsertText(caretIndex, value);
-        caretIndex += value.Length;
+        document.InsertText(caretIndex, normalizedValue);
+        caretIndex += normalizedValue.Length;
 
         _viewerPresenter.SetCaretIndex(caretIndex);
         _viewerPresenter.RebuildFromDocument(false);
@@ -631,6 +658,7 @@ public sealed class CodeEditorInputBridge : MonoBehaviour
     private void ResetHiddenInputField()
     {
         _isApplyingInternalChange = true;
+        _lastHiddenInputValue = string.Empty;
         _hiddenInputField.text = string.Empty;
         _hiddenInputField.caretPosition = 0;
         _hiddenInputField.selectionAnchorPosition = 0;
@@ -1771,4 +1799,58 @@ public sealed class CodeEditorInputBridge : MonoBehaviour
 
         return 0;
     }
+
+    private static string GetIncomingTextDelta(string previousValue, string currentValue)
+    {
+        if (string.IsNullOrEmpty(currentValue))
+        {
+            return string.Empty;
+        }
+
+        if (string.IsNullOrEmpty(previousValue))
+        {
+            return currentValue;
+        }
+
+        if (currentValue.StartsWith(previousValue))
+        {
+            return currentValue.Substring(previousValue.Length);
+        }
+
+        return currentValue;
+    }
+
+    private static string NormalizeIncomingText(string value)
+    {
+        if (string.IsNullOrEmpty(value))
+        {
+            return string.Empty;
+        }
+
+        System.Text.StringBuilder builder = new System.Text.StringBuilder(value.Length);
+        bool lastWasNewline = false;
+
+        for (int i = 0; i < value.Length; i++)
+        {
+            char current = value[i];
+
+            if (current == '\r' || current == '\n')
+            {
+                if (!lastWasNewline)
+                {
+                    builder.Append('\n');
+                    lastWasNewline = true;
+                }
+
+                continue;
+            }
+
+            lastWasNewline = false;
+            builder.Append(current);
+        }
+
+        return builder.ToString();
+    }
+
+
 }

@@ -36,6 +36,9 @@ public sealed class CodeViewerPresenter : MonoBehaviour
     [SerializeField] private Color _stringColor = new Color(0.95f, 0.70f, 0.35f, 1f);
     [SerializeField] private Color _numberColor = new Color(0.65f, 0.90f, 0.45f, 1f);
     [SerializeField] private Color _commentColor = new Color(0.45f, 0.80f, 0.45f, 1f);
+    [SerializeField] private Color _actionColor = new Color(0.95f, 0.80f, 0.35f, 1f);
+    [SerializeField] private Color _queryColor = new Color(0.65f, 0.90f, 0.45f, 1f);
+    [SerializeField] private Color _userFunctionColor = new Color(0.90f, 0.60f, 1f, 1f);
 
     [Header("Caret")]
     [SerializeField] private bool _blinkCaret = true;
@@ -43,34 +46,12 @@ public sealed class CodeViewerPresenter : MonoBehaviour
     [SerializeField] private bool _enableHorizontalScroll = true;
     [SerializeField] private float _horizontalPadding = 32f;
 
-
     private float _lastCaretBlinkToggleTime;
     private bool _caretBlinkVisible = true;
     private readonly System.Collections.Generic.List<Image> _selectionVisualPool = new System.Collections.Generic.List<Image>();
     private readonly CodeEditorHistory _history = new CodeEditorHistory();
-
-    private static readonly string[] Keywords = new string[]
-    {
-        "if",
-        "else",
-        "while",
-        "for",
-        "break",
-        "continue",
-        "return",
-        "def",
-        "import",
-        "true",
-        "false",
-        "null",
-        "and",
-        "or",
-        "not",
-        "class",
-        "from",
-        "as",
-        "pass"
-    };
+    private readonly CodeLanguageRegistry _languageRegistry = new CodeLanguageRegistry();
+    private readonly CodeSymbolResolver _symbolResolver = new CodeSymbolResolver();
 
     private bool _hasAppliedSourceText;
     private readonly CodeDocument _document = new CodeDocument();
@@ -215,7 +196,6 @@ public sealed class CodeViewerPresenter : MonoBehaviour
     private void ApplyText()
     {
         string richText = BuildRichText(_document.Text);
-
         _codeRichText.text = richText;
     }
 
@@ -354,9 +334,11 @@ public sealed class CodeViewerPresenter : MonoBehaviour
                 int identifierEnd = FindIdentifierEnd(sourceText, index);
                 string identifier = sourceText.Substring(index, identifierEnd - index);
 
-                if (IsKeyword(identifier))
+                Color identifierColor;
+
+                if (TryGetIdentifierColor(identifier, out identifierColor))
                 {
-                    builder.Append(WrapWithColor(EscapeRichText(identifier), _keywordColor));
+                    builder.Append(WrapWithColor(EscapeRichText(identifier), identifierColor));
                 }
                 else
                 {
@@ -372,6 +354,50 @@ public sealed class CodeViewerPresenter : MonoBehaviour
         }
 
         return WrapWithColor(builder.ToString(), _defaultColor);
+    }
+
+    private bool TryGetIdentifierColor(string identifier, out Color color)
+    {
+        color = _defaultColor;
+
+        if (string.IsNullOrEmpty(identifier))
+        {
+            return false;
+        }
+
+        if (_languageRegistry.IsKeyword(identifier))
+        {
+            color = _keywordColor;
+            return true;
+        }
+
+        CodeSymbolInfo symbolInfo = _symbolResolver.ResolveByName(_document, identifier);
+
+        if (symbolInfo == null)
+        {
+            return false;
+        }
+
+        switch (symbolInfo.Kind)
+        {
+            case CodeSymbolKind.Keyword:
+                color = _keywordColor;
+                return true;
+
+            case CodeSymbolKind.Action:
+                color = _actionColor;
+                return true;
+
+            case CodeSymbolKind.Query:
+                color = _queryColor;
+                return true;
+
+            case CodeSymbolKind.UserFunction:
+                color = _userFunctionColor;
+                return true;
+        }
+
+        return false;
     }
 
     private static int FindLineEnd(string sourceText, int startIndex)
@@ -467,19 +493,6 @@ public sealed class CodeViewerPresenter : MonoBehaviour
         }
 
         return index;
-    }
-
-    private static bool IsKeyword(string value)
-    {
-        for (int i = 0; i < Keywords.Length; i++)
-        {
-            if (Keywords[i] == value)
-            {
-                return true;
-            }
-        }
-
-        return false;
     }
 
     private static string EscapeRichText(string value)
@@ -1443,6 +1456,7 @@ public sealed class CodeViewerPresenter : MonoBehaviour
         }
 
         TMP_TextInfo textInfo = _codeRichText.textInfo;
+
         if (textInfo == null || textInfo.lineCount <= 0)
         {
             return;
@@ -1552,7 +1566,12 @@ public sealed class CodeViewerPresenter : MonoBehaviour
 
     public RectTransform GetCodeViewportRect()
     {
-        return _codeViewportRect;
+        if (_codeViewportRect != null)
+        {
+            return _codeViewportRect;
+        }
+
+        return _viewportRect;
     }
 
     private float GetCurrentCaretLineHeight()
@@ -1572,5 +1591,4 @@ public sealed class CodeViewerPresenter : MonoBehaviour
 
         return GetCaretLineHeight(lineIndex);
     }
-
 }

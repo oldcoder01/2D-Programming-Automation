@@ -3,6 +3,7 @@ using System.Collections.Generic;
 public sealed class CodeCompletionProvider
 {
     private readonly CodeLanguageRegistry _languageRegistry = new CodeLanguageRegistry();
+    private readonly CodeSymbolResolver _symbolResolver = new CodeSymbolResolver();
 
     public List<CodeCompletionItem> GetSuggestions(CodeDocument document, int caretIndex)
     {
@@ -98,7 +99,7 @@ public sealed class CodeCompletionProvider
             CodeCompletionItem item = new CodeCompletionItem();
             item.Label = keyword;
             item.InsertText = keyword;
-            item.Description = GetKeywordDescription(keyword);
+            item.Description = _languageRegistry.GetKeywordDescription(keyword);
             item.Kind = CodeSymbolKind.Keyword;
             item.SortScore = GetKeywordSortScore(keyword, context);
             item.SortScore += GetPrefixBonus(keyword, context.Prefix);
@@ -127,7 +128,7 @@ public sealed class CodeCompletionProvider
             CodeCompletionItem item = new CodeCompletionItem();
             item.Label = baseName;
             item.InsertText = baseName;
-            item.Description = definition.Description;
+            item.Description = definition.GetDetailDescription();
 
             if (definition.Kind == ScriptBuiltInKind.Action)
             {
@@ -148,7 +149,7 @@ public sealed class CodeCompletionProvider
     private void AddUserFunctionSuggestions(List<CodeCompletionItem> results, CodeCompletionContext context, CodeDocument document)
     {
         HashSet<string> addedNames = new HashSet<string>();
-        List<string> functionNames = ExtractUserFunctionNames(document);
+        List<string> functionNames = _symbolResolver.ExtractUserFunctionNames(document);
 
         for (int i = 0; i < functionNames.Count; i++)
         {
@@ -164,10 +165,17 @@ public sealed class CodeCompletionProvider
                 continue;
             }
 
+            CodeSymbolResolver.FunctionDefinitionInfo functionInfo;
+
+            if (!_symbolResolver.TryGetUserFunctionDefinition(document, functionName, out functionInfo))
+            {
+                continue;
+            }
+
             CodeCompletionItem item = new CodeCompletionItem();
             item.Label = functionName;
             item.InsertText = functionName;
-            item.Description = "User-defined function";
+            item.Description = BuildUserFunctionDetail(functionInfo);
             item.Kind = CodeSymbolKind.UserFunction;
             item.SortScore = context.IsDefinitionNameContext ? 5 : 12;
             item.SortScore += GetPrefixBonus(functionName, context.Prefix);
@@ -175,50 +183,16 @@ public sealed class CodeCompletionProvider
         }
     }
 
-    private List<string> ExtractUserFunctionNames(CodeDocument document)
+    private static string BuildUserFunctionDetail(CodeSymbolResolver.FunctionDefinitionInfo functionInfo)
     {
-        List<string> results = new List<string>();
-
-        if (document == null)
-        {
-            return results;
-        }
-
-        for (int lineIndex = 0; lineIndex < document.LineCount; lineIndex++)
-        {
-            string lineText = document.GetLineText(lineIndex);
-
-            if (string.IsNullOrWhiteSpace(lineText))
-            {
-                continue;
-            }
-
-            string trimmedLine = lineText.TrimStart();
-
-            if (!trimmedLine.StartsWith("def "))
-            {
-                continue;
-            }
-
-            int nameStartIndex = 4;
-            int openParenIndex = trimmedLine.IndexOf('(', nameStartIndex);
-
-            if (openParenIndex <= nameStartIndex)
-            {
-                continue;
-            }
-
-            string functionName = trimmedLine.Substring(nameStartIndex, openParenIndex - nameStartIndex).Trim();
-
-            if (string.IsNullOrEmpty(functionName))
-            {
-                continue;
-            }
-
-            results.Add(functionName);
-        }
-
-        return results;
+        System.Text.StringBuilder builder = new System.Text.StringBuilder();
+        builder.Append("Category: User Function");
+        builder.Append("\n\n");
+        builder.Append("Defined in this script.");
+        builder.Append("\n\n");
+        builder.Append("Signature: ");
+        builder.Append(functionInfo.Signature);
+        return builder.ToString();
     }
 
     private static bool LooksLikeExpressionContext(string lineTextBeforeCaret)
@@ -429,34 +403,5 @@ public sealed class CodeCompletionProvider
         }
 
         return true;
-    }
-
-    private static string GetKeywordDescription(string keyword)
-    {
-        switch (keyword)
-        {
-            case "def":
-                return "Defines a reusable function.";
-            case "if":
-                return "Runs a block when the condition is true.";
-            case "elif":
-                return "Adds another conditional branch.";
-            case "else":
-                return "Runs when no earlier condition matched.";
-            case "while":
-                return "Repeats a block while the condition stays true.";
-            case "not":
-                return "Negates a boolean expression.";
-            case "and":
-                return "Returns true only if both sides are true.";
-            case "or":
-                return "Returns true if either side is true.";
-            case "true":
-                return "Boolean true value.";
-            case "false":
-                return "Boolean false value.";
-        }
-
-        return string.Empty;
     }
 }
